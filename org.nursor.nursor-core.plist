@@ -6,7 +6,7 @@
     <string>org.nursor.nursor-core</string>
 
     <key>Program</key>
-    <string>/usr/local/bin/nursor-core</string>
+    <string>/Library/Application Support/Nursor/nursor-core</string>
     <key>MachServices</key>
     <dict>
         <key>org.nursor.nursor-core</key> 

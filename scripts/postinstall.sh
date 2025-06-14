@@ -5,6 +5,8 @@
 # It runs as root.
 
 echo "Nursor Installer: Running postinstall script..."
+LOG_FILE="/var/log/nursor_install_log.log" # 定义日志文件路径
+echo "Nursor Installer: Running postinstall script..." >> "${LOG_FILE}"
 
 # --- 1. 定义路径 ---
 # $2 是安装目标根目录 (通常是 /)
@@ -20,46 +22,46 @@ LAUNCHD_DEST_PATH="${INSTALL_ROOT_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAM
 
 # --- 2. 确保核心二进制文件目录存在并设置权限 ---
 # pkgbuild 会复制文件，但这里额外确保目录权限，防止意外
-echo "Ensuring core binary directory exists and has correct permissions: ${CORE_DEST_DIR}"
+echo "Ensuring core binary directory exists and has correct permissions: ${CORE_DEST_DIR}" >> "${LOG_FILE}"
 mkdir -p "${CORE_DEST_DIR}"
 chmod 755 "${CORE_DEST_DIR}"
 chown root:wheel "${CORE_DEST_DIR}"
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${CORE_DEST_DIR}."
+    echo "ERROR: Failed to set permissions for ${CORE_DEST_DIR}." >> "${LOG_FILE}"
     exit 1
 fi
 
 # --- 3. 设置核心二进制文件权限 ---
-echo "Setting permissions for core binary: ${CORE_DEST_PATH}"
+echo "Setting permissions for core binary: ${CORE_DEST_PATH}" >> "${LOG_FILE}"
 chmod 755 "${CORE_DEST_PATH}" # 确保可执行
 chown root:wheel "${CORE_DEST_PATH}" # 确保所有者为 root
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${CORE_DEST_PATH}."
+    echo "ERROR: Failed to set permissions for ${CORE_DEST_PATH}." >> "${LOG_FILE}"
     exit 1
 fi
 
 # --- 4. 设置 Launchd Plist 文件权限 ---
-echo "Setting permissions for Launchd Plist: ${LAUNCHD_DEST_PATH}"
+echo "Setting permissions for Launchd Plist: ${LAUNCHD_DEST_PATH}" >> "${LOG_FILE}"
 chmod 644 "${LAUNCHD_DEST_PATH}" # Plist 文件权限
 chown root:wheel "${LAUNCHD_DEST_PATH}" # 所有者为 root
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${LAUNCHD_DEST_PATH}."
+    echo "ERROR: Failed to set permissions for ${LAUNCHD_DEST_PATH}." >> "${LOG_FILE}"
     exit 1
 fi
 
 # --- 5. 注册并加载 Launchd 服务 ---
-echo "Loading Launchd service: ${LAUNCHD_PLIST_NAME}"
+echo "Loading Launchd service: ${LAUNCHD_PLIST_NAME}" >> "${LOG_FILE}"
 # 卸载旧服务（如果存在），忽略错误
 launchctl unload "${LAUNCHD_DEST_PATH}" 2>/dev/null || true
 # 加载新服务。-w 写入用户默认值（持久化）。
 launchctl load -w "${LAUNCHD_DEST_PATH}"
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to load Launchd service. Check logs for details."
-    echo "Please check /var/log/nursor-core.log for more information."
+    echo "ERROR: Failed to load Launchd service. Check logs for details." >> "${LOG_FILE}"
+    echo "Please check /var/log/nursor-core.log for more information." >> "${LOG_FILE}"
     exit 1
 fi
-echo "Launchd service registered and loaded successfully."
+echo "Launchd service registered and loaded successfully." >> "${LOG_FILE}"
 
-echo "Nursor Installer: Postinstall script finished."
+echo "Nursor Installer: Postinstall script finished." >> "${LOG_FILE}"
 
 exit 0

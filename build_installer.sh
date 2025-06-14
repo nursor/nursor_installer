@@ -53,7 +53,7 @@ pkgbuild \
     --version "1.0" \
     --ownership "preserve" \
     --scripts "scripts" \
-    "${BUILD_DIR}/org.nursor.nursor-core.daemon.pkg" # <-- 确保文件名与 identifier 匹配
+    "${BUILD_DIR}/org.nursor.nursor-core.daemon.pkg"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build NursorCoreDaemon.pkg"
@@ -67,7 +67,7 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
 <installer-gui-script minSpecVersion="2.0">
     <title>Nursor Installer</title>
 
-    <options customize="no" require-scripts="false" rootVolumeOnly="true" hostArchitectures="arm64,x86_64"/>
+    <options customize="no" require-scripts="false" rootVolumeOnly="true" hostArchitectures="x86_64"/>
 
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
@@ -155,7 +155,7 @@ echo "--- Nursor 安装包构建完成！---"
 echo "您可以在 '${OUTPUT_DIR}/${INSTALLER_NAME}.pkg' 找到安装包。"
 
 # 清理临时文件 (可选)
-rm -rf "$BUILD_DIR"
+# rm -rf "$BUILD_DIR"
 echo "临时构建文件已清理。"
 
 exit 0
