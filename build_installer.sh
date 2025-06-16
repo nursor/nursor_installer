@@ -51,7 +51,7 @@ pkgbuild \
     --install-location "/" \
     --identifier "org.nursor.nursor-core.daemon" \
     --version "1.0" \
-    --ownership "preserve" \
+    --ownership recommended \
     --scripts "scripts" \
     "${BUILD_DIR}/org.nursor.nursor-core.daemon.pkg"
 

@@ -5,8 +5,11 @@
     <key>Label</key>
     <string>org.nursor.nursor-core</string>
 
-    <key>Program</key>
-    <string>/Library/Application Support/Nursor/nursor-core</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/Nursor/nursor-core</string>
+    </array>
+
     <key>MachServices</key>
     <dict>
         <key>org.nursor.nursor-core</key> 
