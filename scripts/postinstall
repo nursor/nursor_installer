@@ -5,6 +5,7 @@
 # It runs as root.
 
 echo "Nursor Installer: Running postinstall script..."
+touch /private/tmp/installer-script-ran
 LOG_FILE="/var/log/nursor_install_log.log" # 定义日志文件路径
 echo "Nursor Installer: Running postinstall script..." >> "${LOG_FILE}"
 
@@ -52,9 +53,8 @@ fi
 # --- 5. 注册并加载 Launchd 服务 ---
 echo "Loading Launchd service: ${LAUNCHD_PLIST_NAME}" >> "${LOG_FILE}"
 # 卸载旧服务（如果存在），忽略错误
-launchctl unload "${LAUNCHD_DEST_PATH}" 2>/dev/null || true
-# 加载新服务。-w 写入用户默认值（持久化）。
-launchctl load -w "${LAUNCHD_DEST_PATH}"
+launchctl bootout system "${LAUNCHD_DEST_PATH}" 2>/dev/null || true
+launchctl bootstrap system "${LAUNCHD_DEST_PATH}"
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to load Launchd service. Check logs for details." >> "${LOG_FILE}"
     echo "Please check /var/log/nursor-core.log for more information." >> "${LOG_FILE}"
