@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# 检查是否以 root 权限运行
+touch /private/tmp/installer-script-ran
+
+# 创建必要的目录
+mkdir -p /usr/local/bin
+mkdir -p /Library/LaunchDaemons
+mkdir -p /var/log
+
+exit 0

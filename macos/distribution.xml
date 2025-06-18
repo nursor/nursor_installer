@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-script minSpecVersion="1.0" authoringTool="NursorInstaller" >
+    <title>Nursor Installer</title>
+    <welcome file="welcome.html" mime-type="text/html" />
+    <conclusion file="conclusion.html" mime-type="text/html" />
+
+    <options customize="no" allow-external-scripts="no" />
+    <installation-check script="checkInstall()"/>
+    <volume-check script="checkVolume()"/>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="app"/>
+            <line choice="daemon"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default" title="Nursor" start_enabled="true" start_selected="true" >
+        <pkg-ref id="org.nursor.nursor-app" file="org.nursor.NursorApp.pkg"/>
+        <pkg-ref id="org.nursor.nursor-core.daemon" file="org.nursor.nursor-core.daemon.pkg"/>
+    </choice>
+
+    <choice id="app" title="Nursor Application" visible="true" start_selected="true">
+        <pkg-ref id="org.nursor.NursorApp" file="org.nursor.NursorApp.pkg"/>
+    </choice>
+
+    <choice id="daemon" title="Nursor Core Service (Requires Root)" visible="true" start_selected="true">
+        <pkg-ref id="org.nursor.nursor-core.daemon" file="org.nursor.nursor-core.daemon.pkg"/>
+    </choice>
+
+    <script>
+        function checkInstall() {
+            system.log("Running installation checks...");
+            return true;
+        }
+
+        function checkVolume() {
+            system.log("Running volume checks...");
+            return true;
+        }
+    </script>
+</installer-script>
