@@ -1,6 +1,12 @@
 #!/bin/bash
 
-# 检查是否以 root 权限运行
+if [ -z "$COMMAND_LINE_INSTALL" ]; then
+  echo "正在通过 GUI 安装器运行安装脚本"
+  exit 0
+else
+  echo "正在通过命令行 installer 安装" > /tmp/install_debug.log
+fi
+
 touch /private/tmp/installer-script-ran
 
 # 创建必要的目录

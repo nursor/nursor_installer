@@ -3,6 +3,13 @@
 # Postinstall script for Nursor
 # This script runs after all files have been copied to their destination.
 # It runs as root.
+if [ -z "$COMMAND_LINE_INSTALL" ]; then
+  echo "正在通过 GUI 安装器运行安装脚本" 
+  exit 0
+else
+  echo "正在通过命令行 installer 安装" > /tmp/install_debug.log
+fi
+
 
 echo "Nursor Installer: Running postinstall script..."
 touch /private/tmp/installer-script-ran
