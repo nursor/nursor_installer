@@ -2,6 +2,7 @@ macos/Nursor.app
 macos/build_temp
 macos/nursor-core
 macos/output
+Nursor.app/
 .DS_Store
 .vscode
 .idea

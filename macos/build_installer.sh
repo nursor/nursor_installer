@@ -45,6 +45,9 @@ mkdir -p "${PAYLOAD_DIR}/Library/LaunchDaemons"
 cp "${CORE_BINARY_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CORE_BINARY_NAME}"
 cp "${LAUNCHD_PLIST_NAME}" "${PAYLOAD_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
 
+chmod +x "scripts/preinstall"
+chmod +x "scripts/postinstall"
+
 # --scripts 参数指定脚本目录
 pkgbuild \
     --root "${PAYLOAD_DIR}" \
