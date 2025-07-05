@@ -4,7 +4,10 @@
 INSTALLER_NAME="NursorInstaller"
 APP_NAME="Nursor.app"
 CORE_BINARY_NAME="nursor-core"
+CA_PEM_NAME="ca.pem"
 LAUNCHD_PLIST_NAME="org.nursor.nursor-core.plist"
+TRUSTCA_PLIST_NAME="org.nursor.trustca.plist"
+CA_ONCE_SH_NAME="trust_ca_once.sh"
 
 # 临时工作目录
 BUILD_DIR="${PWD}/build_temp"
@@ -44,6 +47,9 @@ mkdir -p "${PAYLOAD_DIR}/Library/LaunchDaemons"
 # 复制文件到临时结构
 cp "${CORE_BINARY_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CORE_BINARY_NAME}"
 cp "${LAUNCHD_PLIST_NAME}" "${PAYLOAD_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
+cp "${CA_PEM_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CA_PEM_NAME}"
+# cp "${TRUSTCA_PLIST_NAME}" "${PAYLOAD_DIR}/Library/LaunchDaemons/${TRUSTCA_PLIST_NAME}"
+cp "${CA_ONCE_SH_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CA_ONCE_SH_NAME}"
 
 chmod +x "scripts/preinstall"
 chmod +x "scripts/postinstall"

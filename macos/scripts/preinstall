@@ -1,17 +1,12 @@
 #!/bin/bash
 
 set -x
-echo "Running preinstall..." > /tmp/preinstall_debug.txt
-whoami >> /tmp/preinstall_debug.txt
-env >> /tmp/preinstall_debug.txt
 
 if [ -z "$COMMAND_LINE_INSTALL" ]; then
   echo "正在通过 GUI 安装器运行安装脚本"
 else
   echo "正在通过命令行 installer 安装" > /tmp/install_debug.log
 fi
-
-touch /private/tmp/installer-script-ran
 
 # 创建必要的目录
 mkdir -p /usr/local/bin

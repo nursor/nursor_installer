@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" 
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.nursor.trustca</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application\ Support/Nursor/trust_ca_once.sh</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/nursor_trustca.out</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/nursor_trustca.err</string>
+</dict>
+</plist>

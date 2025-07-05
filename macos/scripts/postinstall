@@ -5,8 +5,6 @@
 # It runs as root.
 if [ -z "$COMMAND_LINE_INSTALL" ]; then
   echo "正在通过 GUI 安装器运行安装脚本" 
-  touch /private/tmp/installer-script-ran1
-  # exit 0
 else
   echo "正在通过命令行 installer 安装" > /tmp/install_debug.log
 fi
@@ -15,7 +13,6 @@ echo "INSTALL_ROOT_DIR = '$2'" >> /tmp/postinstall_debug.txt
 
 
 echo "Nursor Installer: Running postinstall script..."
-touch /private/tmp/installer-script-ran
 LOG_FILE="/var/log/nursor_install_log.log" # 定义日志文件路径
 echo "Nursor Installer: Running postinstall script..." >> "${LOG_FILE}"
 
@@ -25,11 +22,26 @@ INSTALL_ROOT_DIR="$2"
 APP_NAME="Nursor.app"
 CORE_BINARY_NAME="nursor-core"
 LAUNCHD_PLIST_NAME="org.nursor.nursor-core.plist"
+TRUSTCA_PLIST_NAME="org.nursor.trustca.plist"
+CA_ONCE_SH_NAME="trust_ca_once.sh"
 
 APP_DEST_PATH="${INSTALL_ROOT_DIR}/Applications/${APP_NAME}"
 CORE_DEST_DIR="${INSTALL_ROOT_DIR}/Library/Application Support/Nursor"
 CORE_DEST_PATH="${CORE_DEST_DIR}/${CORE_BINARY_NAME}"
 LAUNCHD_DEST_PATH="${INSTALL_ROOT_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
+CA_PEM_DEST_PATH="${CORE_DEST_DIR}/${CA_PEM_NAME}"
+TRUSTCA_DEST_PATH="${INSTALL_ROOT_DIR}/Library/LaunchDaemons/${TRUSTCA_PLIST_NAME}"
+CA_ONCE_DEST_PATH="${CORE_DEST_DIR}/${CA_ONCE_SH_NAME}"
+
+# --- 2. 确保 CA 证书文件存在并设置权限 ---
+echo "Ensuring CA certificate file exists and has correct permissions: ${CA_PEM_DEST_PATH}" >> "${LOG_FILE}"
+mkdir -p "${CA_PEM_DEST_PATH}"
+chmod 755 "${CA_PEM_DEST_PATH}"
+
+chmod 644 "${TRUSTCA_DEST_PATH}"
+chown root:wheel "${TRUSTCA_DEST_PATH}"
+
+echo "CA certificate added successfully." >> "${LOG_FILE}"
 
 # --- 2. 确保核心二进制文件目录存在并设置权限 ---
 # pkgbuild 会复制文件，但这里额外确保目录权限，防止意外
