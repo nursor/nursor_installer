@@ -1,89 +1,84 @@
 #!/bin/bash
 
-# Postinstall script for Nursor
-# This script runs after all files have been copied to their destination.
-# It runs as root.
-if [ -z "$COMMAND_LINE_INSTALL" ]; then
-  echo "正在通过 GUI 安装器运行安装脚本" 
-else
-  echo "正在通过命令行 installer 安装" > /tmp/install_debug.log
-fi
-
-echo "INSTALL_ROOT_DIR = '$2'" >> /tmp/postinstall_debug.txt
-
+# postinstall 脚本将以 root 权限运行
+# 确保这个脚本是可执行的：chmod +x scripts/postinstall
 
 echo "Nursor Installer: Running postinstall script..."
-LOG_FILE="/var/log/nursor_install_log.log" # 定义日志文件路径
-echo "Nursor Installer: Running postinstall script..." >> "${LOG_FILE}"
 
-# --- 1. 定义路径 ---
-# $2 是安装目标根目录 (通常是 /)
-INSTALL_ROOT_DIR="$2"
+# 定义 APP_NAME, CORE_BINARY_NAME, LAUNCHD_PLIST_NAME
+# 这些变量在 build_installer.sh 中定义，但为了 postinstall 脚本的独立性，在此处再次定义。
 APP_NAME="Nursor.app"
 CORE_BINARY_NAME="nursor-core"
 LAUNCHD_PLIST_NAME="org.nursor.nursor-core.plist"
-TRUSTCA_PLIST_NAME="org.nursor.trustca.plist"
-CA_ONCE_SH_NAME="trust_ca_once.sh"
 
-APP_DEST_PATH="${INSTALL_ROOT_DIR}/Applications/${APP_NAME}"
-CORE_DEST_DIR="${INSTALL_ROOT_DIR}/Library/Application Support/Nursor"
-CORE_DEST_PATH="${CORE_DEST_DIR}/${CORE_BINARY_NAME}"
-LAUNCHD_DEST_PATH="${INSTALL_ROOT_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
-CA_PEM_DEST_PATH="${CORE_DEST_DIR}/${CA_PEM_NAME}"
-TRUSTCA_DEST_PATH="${INSTALL_ROOT_DIR}/Library/LaunchDaemons/${TRUSTCA_PLIST_NAME}"
-CA_ONCE_DEST_PATH="${CORE_DEST_DIR}/${CA_ONCE_SH_NAME}"
+# 核心服务文件路径
+CORE_BINARY_PATH="/Library/Application Support/Nursor/${CORE_BINARY_NAME}"
+LAUNCHD_PLIST_PATH="/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
 
-# --- 2. 确保 CA 证书文件存在并设置权限 ---
-echo "Ensuring CA certificate file exists and has correct permissions: ${CA_PEM_DEST_PATH}" >> "${LOG_FILE}"
-mkdir -p "${CA_PEM_DEST_PATH}"
-chmod 755 "${CA_PEM_DEST_PATH}"
-
-chmod 644 "${TRUSTCA_DEST_PATH}"
-chown root:wheel "${TRUSTCA_DEST_PATH}"
-
-echo "CA certificate added successfully." >> "${LOG_FILE}"
-
-# --- 2. 确保核心二进制文件目录存在并设置权限 ---
-# pkgbuild 会复制文件，但这里额外确保目录权限，防止意外
-echo "Ensuring core binary directory exists and has correct permissions: ${CORE_DEST_DIR}" >> "${LOG_FILE}"
-mkdir -p "${CORE_DEST_DIR}"
-chmod 755 "${CORE_DEST_DIR}"
-chown root:wheel "${CORE_DEST_DIR}"
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${CORE_DEST_DIR}." >> "${LOG_FILE}"
-    exit 1
+# 检查并加载 LaunchDaemons
+echo "Nursor Installer: Loading LaunchDaemon..."
+if [ -f "${LAUNCHD_PLIST_PATH}" ]; then
+    # 卸载旧的（如果存在），然后加载新的
+    launchctl unload "${LAUNCHD_PLIST_PATH}" 2>/dev/null
+    launchctl load -w "${LAUNCHD_PLIST_PATH}"
+    echo "Nursor Installer: LaunchDaemon ${LAUNCHD_PLIST_PATH} loaded."
+else
+    echo "WARNING: LaunchDaemon plist not found at ${LAUNCHD_PLIST_PATH}."
 fi
 
-# --- 3. 设置核心二进制文件权限 ---
-echo "Setting permissions for core binary: ${CORE_DEST_PATH}" >> "${LOG_FILE}"
-chmod 755 "${CORE_DEST_PATH}" # 确保可执行
-chown root:wheel "${CORE_DEST_PATH}" # 确保所有者为 root
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${CORE_DEST_PATH}." >> "${LOG_FILE}"
-    exit 1
+# ====================================================================================
+# 手动强制移动和注册应用程序（作为最后的手段，如果 PackageKit 仍然重定位）
+# ====================================================================================
+
+DEST_APP_PATH="/Applications/${APP_NAME}"
+ORIGINAL_SOURCE_PATH="/Users/admin161/MyProgram/nursor-install-script-macos/macos/${APP_NAME}" # 根据日志，这是 PackageKit 重定位到的路径
+
+# 尝试在安装沙箱中查找 Nursor.app
+# 这是 PackageKit 应该放置文件的地方，但在您的案例中它被“重定位”了
+SANDBOX_APP_PATH=$(find /Library/InstallerSandboxes/.PKInstallSandboxManager -name "${APP_NAME}" -print -quit 2>/dev/null)
+
+ACTUAL_APP_PATH=""
+
+# 优先检查沙箱路径
+if [ -d "${SANDBOX_APP_PATH}" ]; then
+    ACTUAL_APP_PATH="${SANDBOX_APP_PATH}"
+    echo "Nursor Installer: Nursor.app found in installer sandbox at '${ACTUAL_APP_PATH}'."
+# 如果沙箱中没有，检查它是否被重定位到原始源路径
+elif [ -d "${ORIGINAL_SOURCE_PATH}" ]; then
+    ACTUAL_APP_PATH="${ORIGINAL_SOURCE_PATH}"
+    echo "Nursor Installer: Nursor.app found at original source path (due to relocation) at '${ACTUAL_APP_PATH}'."
+else
+    echo "ERROR: Could not find Nursor.app in any expected location (sandbox or original source path). Manual relocation skipped."
+    # 不在此处退出，允许脚本的其余部分继续执行（例如守护进程加载）
 fi
 
-# --- 4. 设置 Launchd Plist 文件权限 ---
-echo "Setting permissions for Launchd Plist: ${LAUNCHD_DEST_PATH}" >> "${LOG_FILE}"
-chmod 644 "${LAUNCHD_DEST_PATH}" # Plist 文件权限
-chown root:wheel "${LAUNCHD_DEST_PATH}" # 所有者为 root
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to set permissions for ${LAUNCHD_DEST_PATH}." >> "${LOG_FILE}"
-    exit 1
+# 如果找到了应用程序，并且它不在最终目标位置，则尝试移动它
+if [ -d "${ACTUAL_APP_PATH}" ] && [ "${ACTUAL_APP_PATH}" != "${DEST_APP_PATH}" ]; then
+    echo "Nursor Installer: Attempting to move Nursor.app from '${ACTUAL_APP_PATH}' to '${DEST_APP_PATH}'..."
+    # 确保目标目录存在
+    mkdir -p "$(dirname "${DEST_APP_PATH}")"
+    # 移动应用程序
+    mv "${ACTUAL_APP_PATH}" "${DEST_APP_PATH}"
+    if [ $? -eq 0 ]; then
+        echo "Nursor Installer: Nursor.app successfully moved to /Applications."
+        # 设置权限
+        echo "Nursor Installer: Setting permissions for Nursor.app..."
+        chown -R 0:0 "${DEST_APP_PATH}"
+        chmod -R 755 "${DEST_APP_PATH}"
+        # 清理扩展属性（再次，以防万一）
+        echo "Nursor Installer: Cleaning extended attributes for Nursor.app in /Applications..."
+        xattr -rc "${DEST_APP_PATH}"
+
+        # 注册应用程序到 Launch Services
+        echo "Nursor Installer: Registering Nursor.app with Launch Services..."
+        /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${DEST_APP_PATH}"
+        killall Dock 2>/dev/null # 重启 Dock 以刷新 Launchpad
+
+    else
+        echo "ERROR: Failed to move Nursor.app from '${ACTUAL_APP_PATH}' to '${DEST_APP_PATH}'. Check permissions or path."
+    fi
+else
+    echo "Nursor Installer: Nursor.app is either already at /Applications or could not be found for manual relocation/move."
 fi
 
-# --- 5. 注册并加载 Launchd 服务 ---
-echo "Loading Launchd service: ${LAUNCHD_PLIST_NAME}" >> "${LOG_FILE}"
-# 卸载旧服务（如果存在），忽略错误
-launchctl bootout system "${LAUNCHD_DEST_PATH}" 2>/dev/null || true
-launchctl bootstrap system "${LAUNCHD_DEST_PATH}"
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to load Launchd service. Check logs for details." >> "${LOG_FILE}"
-    echo "Please check /var/log/nursor-core.log for more information." >> "${LOG_FILE}"
-    exit 1
-fi
-echo "Launchd service registered and loaded successfully." >> "${LOG_FILE}"
-
-echo "Nursor Installer: Postinstall script finished." >> "${LOG_FILE}"
-
-exit 0
+echo "Nursor Installer: Postinstall script finished."

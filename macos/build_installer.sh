@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# --- 检查是否以 root 权限运行 ---
+if [ "$(id -u)" -ne 0 ]; then
+   echo "此脚本需要以 root 权限运行。请使用 'sudo ./build_installer.sh' 执行。"
+   exit 1
+fi
+
 # --- 定义变量 ---
 INSTALLER_NAME="NursorInstaller"
 APP_NAME="Nursor.app"
@@ -14,6 +20,7 @@ BUILD_DIR="${PWD}/build_temp"
 OUTPUT_DIR="${PWD}/output" # 最终 .pkg 的输出目录
 
 # 清理旧的构建文件
+echo "清理旧的构建文件..."
 rm -rf "$BUILD_DIR"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$BUILD_DIR"
@@ -23,13 +30,35 @@ echo "--- 开始构建 Nursor 安装包 ---"
 
 # --- 1. 创建 Nursor.app 组件包 ---
 echo "构建 Nursor.app 组件包..."
+
+# 创建一个全新的、中立的临时目录来存放 Nursor.app，避免任何历史路径信息干扰
+CLEAN_APP_TEMP_DIR="${BUILD_DIR}/clean_app_source"
+mkdir -p "${CLEAN_APP_TEMP_DIR}"
+
+# 确保 Nursor.app 存在于当前脚本的执行目录中
+if [ ! -d "${APP_NAME}" ]; then
+    echo "ERROR: Nursor.app not found in the current directory (${PWD}/${APP_NAME}). Please ensure it's here before running the script."
+    exit 1
+fi
+
+# 复制 Nursor.app 到这个中立的临时目录
+echo "复制 Nursor.app 到中立临时目录..."
+sudo cp -R "${APP_NAME}" "${CLEAN_APP_TEMP_DIR}/" || { echo "ERROR: Failed to copy Nursor.app to clean temporary directory."; exit 1; }
+
+# IMPORTANT: Remove extended attributes from the *newly copied* .app bundle.
+# This is crucial to prevent macOS PackageKit from "relocating" the app based on its original build path.
+# 使用 sudo 确保权限
+echo "清理中立临时目录中 Nursor.app 的扩展属性..."
+sudo xattr -rc "${CLEAN_APP_TEMP_DIR}/${APP_NAME}" || { echo "ERROR: Failed to clean extended attributes for ${CLEAN_APP_TEMP_DIR}/${APP_NAME}. Check permissions."; exit 1; }
+
+# 使用 --component 方式打包 Nursor.app，直接指向这个中立的副本
 pkgbuild \
-    --component "${APP_NAME}" \
+    --component "${CLEAN_APP_TEMP_DIR}/${APP_NAME}" \
     --install-location "/Applications" \
-    --identifier "org.nursor.NursorApp" \
+    --identifier "org.nursor.nursorApp" \
     --version "1.0" \
-    --ownership "preserve" \
-    "${BUILD_DIR}/org.nursor.NursorApp.pkg" # <-- 确保文件名与 identifier 匹配
+    --ownership "recommended" \
+    "${BUILD_DIR}/org.nursor.NursorApp.pkg"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build NursorApp.pkg"
@@ -76,7 +105,7 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
 <installer-gui-script minSpecVersion="2.0">
     <title>Nursor Installer</title>
 
-    <options customize="no" require-scripts="false" rootVolumeOnly="true" hostArchitectures="x86_64"/>
+    <options customize="no" require-scripts="true" rootVolumeOnly="true" hostArchitectures="arm64"/>
 
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
@@ -164,7 +193,7 @@ echo "--- Nursor 安装包构建完成！---"
 echo "您可以在 '${OUTPUT_DIR}/${INSTALLER_NAME}.pkg' 找到安装包。"
 
 # 清理临时文件 (可选)
-# rm -rf "$BUILD_DIR"
+rm -rf "$BUILD_DIR"
 echo "临时构建文件已清理。"
 
 exit 0
