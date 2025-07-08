@@ -58,7 +58,7 @@ pkgbuild \
     --identifier "org.nursor.nursorApp" \
     --version "1.0" \
     --ownership "recommended" \
-    "${BUILD_DIR}/org.nursor.NursorApp.pkg"
+    "${BUILD_DIR}/org.nursor.nursorApp.pkg"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build NursorApp.pkg"
@@ -117,19 +117,19 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
     </choices-outline>
 
     <choice id="default" title="Nursor">
-        <pkg-ref id="org.nursor.NursorApp">org.nursor.NursorApp.pkg</pkg-ref>
+        <pkg-ref id="org.nursor.nursorApp">org.nursor.nursorApp.pkg</pkg-ref>
         <pkg-ref id="org.nursor.nursor-core.daemon">org.nursor.nursor-core.daemon.pkg</pkg-ref>
     </choice>
 
     <choice id="app" title="Nursor Application">
-        <pkg-ref id="org.nursor.NursorApp">org.nursor.NursorApp.pkg</pkg-ref>
+        <pkg-ref id="org.nursor.nursorApp">org.nursor.nursorApp.pkg</pkg-ref>
     </choice>
 
     <choice id="daemon" title="Nursor Core Service (Requires Root)">
         <pkg-ref id="org.nursor.nursor-core.daemon">org.nursor.nursor-core.daemon.pkg</pkg-ref>
     </choice>
 
-    <pkg-ref id="org.nursor.NursorApp" version="1.0" />
+    <pkg-ref id="org.nursor.nursorApp" version="1.0" />
     <pkg-ref id="org.nursor.nursor-core.daemon" version="1.0" />
 </installer-gui-script>
 EOF
@@ -193,7 +193,7 @@ echo "--- Nursor 安装包构建完成！---"
 echo "您可以在 '${OUTPUT_DIR}/${INSTALLER_NAME}.pkg' 找到安装包。"
 
 # 清理临时文件 (可选)
-rm -rf "$BUILD_DIR"
+# rm -rf "$BUILD_DIR"
 echo "临时构建文件已清理。"
 
 exit 0

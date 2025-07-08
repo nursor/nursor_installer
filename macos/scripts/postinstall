@@ -31,25 +31,36 @@ fi
 # ====================================================================================
 
 DEST_APP_PATH="/Applications/${APP_NAME}"
-ORIGINAL_SOURCE_PATH="/Users/admin161/MyProgram/nursor-install-script-macos/macos/${APP_NAME}" # 根据日志，这是 PackageKit 重定位到的路径
-
-# 尝试在安装沙箱中查找 Nursor.app
-# 这是 PackageKit 应该放置文件的地方，但在您的案例中它被“重定位”了
-SANDBOX_APP_PATH=$(find /Library/InstallerSandboxes/.PKInstallSandboxManager -name "${APP_NAME}" -print -quit 2>/dev/null)
-
 ACTUAL_APP_PATH=""
 
-# 优先检查沙箱路径
-if [ -d "${SANDBOX_APP_PATH}" ]; then
-    ACTUAL_APP_PATH="${SANDBOX_APP_PATH}"
-    echo "Nursor Installer: Nursor.app found in installer sandbox at '${ACTUAL_APP_PATH}'."
-# 如果沙箱中没有，检查它是否被重定位到原始源路径
-elif [ -d "${ORIGINAL_SOURCE_PATH}" ]; then
-    ACTUAL_APP_PATH="${ORIGINAL_SOURCE_PATH}"
-    echo "Nursor Installer: Nursor.app found at original source path (due to relocation) at '${ACTUAL_APP_PATH}'."
+echo "Nursor Installer: Checking for Nursor.app in final destination: ${DEST_APP_PATH}"
+if [ -d "${DEST_APP_PATH}" ]; then
+    ACTUAL_APP_PATH="${DEST_APP_PATH}"
+    echo "Nursor Installer: Nursor.app is already in /Applications. No manual move needed."
+    echo "Nursor Installer: Contents of ${DEST_APP_PATH}:"
+    ls -lR "${DEST_APP_PATH}"
 else
-    echo "ERROR: Could not find Nursor.app in any expected location (sandbox or original source path). Manual relocation skipped."
-    # 不在此处退出，允许脚本的其余部分继续执行（例如守护进程加载）
+    echo "Nursor Installer: Nursor.app not found in /Applications. Searching installer sandbox..."
+
+    # 动态查找活跃的安装沙箱根目录
+    INSTALL_SANDBOX_ROOT=$(find /Library/InstallerSandboxes/.PKInstallSandboxManager -maxdepth 1 -type d -name "*.activeSandbox" -print -quit 2>/dev/null)
+    
+    if [ -n "${INSTALL_SANDBOX_ROOT}" ]; then
+        echo "Nursor Installer: Active Installer Sandbox Root: ${INSTALL_SANDBOX_ROOT}"
+        # 在沙箱的 Root 目录下搜索 Nursor.app，最大深度为 2 (即 Root/Nursor.app 或 Root/Applications/Nursor.app)
+        SANDBOX_APP_PATH=$(find "${INSTALL_SANDBOX_ROOT}/Root" -maxdepth 2 -name "${APP_NAME}" -print -quit 2>/dev/null)
+
+        if [ -d "${SANDBOX_APP_PATH}" ]; then
+            ACTUAL_APP_PATH="${SANDBOX_APP_PATH}"
+            echo "Nursor Installer: Nursor.app found in sandbox at '${ACTUAL_APP_PATH}'."
+            echo "Nursor Installer: Contents of ${ACTUAL_APP_PATH}:"
+            ls -lR "${ACTUAL_APP_PATH}"
+        else
+            echo "ERROR: Nursor.app not found within sandbox's Root directory. Manual relocation skipped."
+        fi
+    else
+        echo "ERROR: Could not find active installer sandbox. Manual relocation skipped."
+    fi
 fi
 
 # 如果找到了应用程序，并且它不在最终目标位置，则尝试移动它
@@ -61,6 +72,9 @@ if [ -d "${ACTUAL_APP_PATH}" ] && [ "${ACTUAL_APP_PATH}" != "${DEST_APP_PATH}" ]
     mv "${ACTUAL_APP_PATH}" "${DEST_APP_PATH}"
     if [ $? -eq 0 ]; then
         echo "Nursor Installer: Nursor.app successfully moved to /Applications."
+        echo "Nursor Installer: Contents of ${DEST_APP_PATH} after move:"
+        ls -lR "${DEST_APP_PATH}"
+
         # 设置权限
         echo "Nursor Installer: Setting permissions for Nursor.app..."
         chown -R 0:0 "${DEST_APP_PATH}"
