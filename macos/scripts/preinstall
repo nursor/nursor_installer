@@ -10,6 +10,7 @@ fi
 
 # 创建必要的目录
 mkdir -p /usr/local/bin
+mkdir -p /Library/Application Support/Nursor
 mkdir -p /Library/LaunchDaemons
 mkdir -p /var/log
 

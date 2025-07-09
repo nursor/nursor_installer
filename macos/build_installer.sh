@@ -15,6 +15,14 @@ LAUNCHD_PLIST_NAME="org.nursor.nursor-core.plist"
 TRUSTCA_PLIST_NAME="org.nursor.trustca.plist"
 CA_ONCE_SH_NAME="trust_ca_once.sh"
 
+# **重要：pkgbuild 的 identifier 必须与 Nursor.app/Contents/Info.plist 中的 CFBundleIdentifier 保持一致**
+# 根据 Nursor.app/Contents/Info.plist，CFBundleIdentifier 为 org.nursor.nursorApp
+APP_IDENTIFIER="org.nursor.nursorApp"
+
+# 获取 Nursor.app 的原始绝对路径，用于传递给 postinstall 脚本 (虽然 postinstall 已简化，但保留以防万一)
+# PWD 是脚本运行时的当前工作目录
+ORIGINAL_NURSOR_APP_ABSOLUTE_PATH="${PWD}/${APP_NAME}"
+
 # 临时工作目录
 BUILD_DIR="${PWD}/build_temp"
 OUTPUT_DIR="${PWD}/output" # 最终 .pkg 的输出目录
@@ -26,39 +34,72 @@ rm -rf "$OUTPUT_DIR"
 mkdir -p "$BUILD_DIR"
 mkdir -p "$OUTPUT_DIR"
 
-echo "--- 开始构建 Nursor 安装包 ---"
+echo "--- 开始构建 Nursor 统一安装包 (含即时重签名) ---"
+
+# --- 创建 Nursor.app 的临时干净副本并清理、重签名 ---
+# 这一步是为了确保打包的 Nursor.app 不带任何可能导致 PackageKit 混淆的原始构建路径信息。
+echo "创建 Nursor.app 的干净副本..."
+TEMP_APP_COPY_PATH="${BUILD_DIR}/temp_nursor_app_clean/${APP_NAME}"
+mkdir -p "$(dirname "${TEMP_APP_COPY_PATH}")" # 创建父目录
+
+if [ ! -d "${APP_NAME}" ]; then
+    echo "ERROR: Original Nursor.app not found in the current directory (${PWD}/${APP_NAME}). Please ensure it's here before running the script."
+    exit 1
+fi
+
+# 使用 rsync 复制以保留更多属性，并确保复制成功
+rsync -a "${APP_NAME}" "$(dirname "${TEMP_APP_COPY_PATH}")/" || { echo "ERROR: Failed to copy original Nursor.app to temporary clean directory."; exit 1; }
+
+# 清理干净副本的扩展属性
+echo "清理 Nursor.app 干净副本的扩展属性..."
+sudo xattr -rc "${TEMP_APP_COPY_PATH}" || { echo "ERROR: Failed to clean extended attributes for temporary clean ${APP_NAME}. Check permissions."; exit 1; }
+
+# 移除应用程序包内的 _CodeSignature 目录 (强烈推荐，避免签名问题)
+echo "移除 Nursor.app 干净副本内的 _CodeSignature 目录..."
+if [ -d "${TEMP_APP_COPY_PATH}/Contents/_CodeSignature" ]; then
+    sudo rm -rf "${TEMP_APP_COPY_PATH}/Contents/_CodeSignature" || { echo "ERROR: Failed to remove _CodeSignature from temporary clean ${APP_NAME}."; exit 1; }
+fi
+
+# **新增：对干净副本进行即时签名 (ad-hoc signing)**
+# 这可能会覆盖或清除导致 PackageKit 重定位的深层嵌入路径信息。
+echo "对 Nursor.app 干净副本进行即时签名 (ad-hoc signing)..."
+# 使用 '-' 进行即时签名，'--deep' 递归签名内部所有可执行文件和框架
+sudo codesign --force --deep --sign - "${TEMP_APP_COPY_PATH}"
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to ad-hoc sign temporary clean ${APP_NAME}. Check codesign utility and permissions."
+    exit 1
+fi
+
+# 确保复制后的 Nursor.app 具有正确的权限
+echo "设置 Nursor.app 干净副本的权限..."
+chmod -R 755 "${TEMP_APP_COPY_PATH}" || { echo "ERROR: Failed to set permissions for temporary clean Nursor.app."; exit 1; }
+chmod +x "${TEMP_APP_COPY_PATH}/Contents/MacOS/"* || { echo "WARNING: Could not set execute permissions for all binaries in temporary clean Nursor.app. This might be normal if some are not executables."; }
+
 
 # --- 1. 创建 Nursor.app 组件包 ---
 echo "构建 Nursor.app 组件包..."
 
-# 创建一个全新的、中立的临时目录来存放 Nursor.app，避免任何历史路径信息干扰
-CLEAN_APP_TEMP_DIR="${BUILD_DIR}/clean_app_source"
-mkdir -p "${CLEAN_APP_TEMP_DIR}"
+# 创建一个临时的文件系统根目录，用于 pkgbuild
+# 这里的结构将直接映射到安装目标 /
+APP_PAYLOAD_ROOT="${BUILD_DIR}/app_payload_root"
+mkdir -p "${APP_PAYLOAD_ROOT}/Applications" # 在临时根目录下创建 /Applications 目录
 
-# 确保 Nursor.app 存在于当前脚本的执行目录中
-if [ ! -d "${APP_NAME}" ]; then
-    echo "ERROR: Nursor.app not found in the current directory (${PWD}/${APP_NAME}). Please ensure it's here before running the script."
-    exit 1
-fi
+# 复制 Nursor.app (已清理、重签名) 到临时根目录的 /Applications 路径下
+echo "复制 Nursor.app 干净副本到临时 payload 根目录..."
+rsync -a "${TEMP_APP_COPY_PATH}" "${APP_PAYLOAD_ROOT}/Applications/" || { echo "ERROR: Failed to copy clean Nursor.app to temporary payload root directory."; exit 1; }
 
-# 复制 Nursor.app 到这个中立的临时目录
-echo "复制 Nursor.app 到中立临时目录..."
-sudo cp -R "${APP_NAME}" "${CLEAN_APP_TEMP_DIR}/" || { echo "ERROR: Failed to copy Nursor.app to clean temporary directory."; exit 1; }
 
-# IMPORTANT: Remove extended attributes from the *newly copied* .app bundle.
-# This is crucial to prevent macOS PackageKit from "relocating" the app based on its original build path.
-# 使用 sudo 确保权限
-echo "清理中立临时目录中 Nursor.app 的扩展属性..."
-sudo xattr -rc "${CLEAN_APP_TEMP_DIR}/${APP_NAME}" || { echo "ERROR: Failed to clean extended attributes for ${CLEAN_APP_TEMP_DIR}/${APP_NAME}. Check permissions."; exit 1; }
-
-# 使用 --component 方式打包 Nursor.app，直接指向这个中立的副本
+# 使用 --root 方式打包 Nursor.app
+# --root 指定了包的“内容”来源 (${APP_PAYLOAD_ROOT})
+# --install-location "/" 意味着 ${APP_PAYLOAD_ROOT} 中的内容将直接复制到目标系统的根目录
+# 因此，${APP_PAYLOAD_ROOT}/Applications/Nursor.app 将被安装到 /Applications/Nursor.app
 pkgbuild \
-    --component "${CLEAN_APP_TEMP_DIR}/${APP_NAME}" \
-    --install-location "/Applications" \
-    --identifier "org.nursor.nursorApp" \
+    --root "${APP_PAYLOAD_ROOT}" \
+    --install-location "/" \
+    --identifier "${APP_IDENTIFIER}" \
     --version "1.0" \
     --ownership "recommended" \
-    "${BUILD_DIR}/org.nursor.nursorApp.pkg"
+    "${BUILD_DIR}/org.nursor.NursorApp.pkg"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build NursorApp.pkg"
@@ -69,23 +110,27 @@ fi
 echo "构建 nursor-core 及 Launchd Plist 组件包..."
 
 # 创建一个临时的根目录结构，用于 pkgbuild
-PAYLOAD_DIR="${BUILD_DIR}/payload_core"
-mkdir -p "${PAYLOAD_DIR}/Library/Application Support/Nursor"
-mkdir -p "${PAYLOAD_DIR}/Library/LaunchDaemons"
+CORE_PAYLOAD_ROOT="${BUILD_DIR}/core_payload_root"
+mkdir -p "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor"
+mkdir -p "${CORE_PAYLOAD_ROOT}/Library/LaunchDaemons"
 
 # 复制文件到临时结构
-cp "${CORE_BINARY_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CORE_BINARY_NAME}"
-cp "${LAUNCHD_PLIST_NAME}" "${PAYLOAD_DIR}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
-cp "${CA_PEM_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CA_PEM_NAME}"
-# cp "${TRUSTCA_PLIST_NAME}" "${PAYLOAD_DIR}/Library/LaunchDaemons/${TRUSTCA_PLIST_NAME}"
-cp "${CA_ONCE_SH_NAME}" "${PAYLOAD_DIR}/Library/Application Support/Nursor/${CA_ONCE_SH_NAME}"
+cp "${CORE_BINARY_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/${CORE_BINARY_NAME}" || { echo "ERROR: Failed to copy ${CORE_BINARY_NAME}."; exit 1; }
+cp "${LAUNCHD_PLIST_NAME}" "${CORE_PAYLOAD_ROOT}/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}" || { echo "ERROR: Failed to copy ${LAUNCHD_PLIST_NAME}."; exit 1; }
+cp "${CA_PEM_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/${CA_PEM_NAME}" || { echo "ERROR: Failed to copy ${CA_PEM_NAME}."; exit 1; }
+cp "${CA_ONCE_SH_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/${CA_ONCE_SH_NAME}" || { echo "ERROR: Failed to copy ${CA_ONCE_SH_NAME}."; exit 1; }
 
-chmod +x "scripts/preinstall"
-chmod +x "scripts/postinstall"
+# 确保脚本目录存在且脚本可执行
+if [ ! -d "scripts" ]; then
+    echo "ERROR: 'scripts' directory not found. Please ensure it exists and contains preinstall/postinstall scripts."
+    exit 1
+fi
+chmod +x "scripts/preinstall" || { echo "ERROR: Failed to set execute permissions for scripts/preinstall."; exit 1; }
+chmod +x "scripts/postinstall" || { echo "ERROR: Failed to set execute permissions for scripts/postinstall."; exit 1; }
 
 # --scripts 参数指定脚本目录
 pkgbuild \
-    --root "${PAYLOAD_DIR}" \
+    --root "${CORE_PAYLOAD_ROOT}" \
     --install-location "/" \
     --identifier "org.nursor.nursor-core.daemon" \
     --version "1.0" \
@@ -105,7 +150,7 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
 <installer-gui-script minSpecVersion="2.0">
     <title>Nursor Installer</title>
 
-    <options customize="no" require-scripts="true" rootVolumeOnly="true" hostArchitectures="arm64"/>
+    <options customize="no" require-scripts="true" rootVolumeOnly="true" hostArchitectures="x86_64"/>
 
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
@@ -117,19 +162,19 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
     </choices-outline>
 
     <choice id="default" title="Nursor">
-        <pkg-ref id="org.nursor.nursorApp">org.nursor.nursorApp.pkg</pkg-ref>
+        <pkg-ref id="${APP_IDENTIFIER}">org.nursor.NursorApp.pkg</pkg-ref>
         <pkg-ref id="org.nursor.nursor-core.daemon">org.nursor.nursor-core.daemon.pkg</pkg-ref>
     </choice>
 
     <choice id="app" title="Nursor Application">
-        <pkg-ref id="org.nursor.nursorApp">org.nursor.nursorApp.pkg</pkg-ref>
+        <pkg-ref id="${APP_IDENTIFIER}">org.nursor.NursorApp.pkg</pkg-ref>
     </choice>
 
     <choice id="daemon" title="Nursor Core Service (Requires Root)">
         <pkg-ref id="org.nursor.nursor-core.daemon">org.nursor.nursor-core.daemon.pkg</pkg-ref>
     </choice>
 
-    <pkg-ref id="org.nursor.nursorApp" version="1.0" />
+    <pkg-ref id="${APP_IDENTIFIER}" version="1.0" />
     <pkg-ref id="org.nursor.nursor-core.daemon" version="1.0" />
 </installer-gui-script>
 EOF
@@ -169,6 +214,7 @@ cat > "${BUILD_DIR}/conclusion.html" <<EOF
         <li>确保 SIP 已关闭。</li>
         <li>首次运行 Nursor.app 时，请确保在<b>“系统设置”->“隐私与安全性”</b>中允许了它。</li>
         <li>检查核心服务的日志文件：<code>/var/log/nursor-core.log</code>。</li>
+        <li>如果应用程序未出现在 Launchpad 中，请尝试重启您的 Mac，或在终端中运行 <code>killall Dock</code> 来刷新 Launchpad 索引。</li>
     </ul>
     <p>感谢您的使用！</p>
 </body>
@@ -176,8 +222,8 @@ cat > "${BUILD_DIR}/conclusion.html" <<EOF
 EOF
 
 
-# --- 5. 组合所有组件包成最终的 .pkg (保持不变) ---
-echo "组合所有组件包成最终的 .pkg 文件..."
+# --- 5. 构建最终的安装包 ---
+echo "构建最终的安装包..."
 productbuild \
     --distribution "${BUILD_DIR}/distribution.xml" \
     --resources "${BUILD_DIR}" \
@@ -185,15 +231,16 @@ productbuild \
     "${OUTPUT_DIR}/${INSTALLER_NAME}.pkg"
 
 if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to build final .pkg"
+    echo "ERROR: Failed to build final installer package."
     exit 1
 fi
 
-echo "--- Nursor 安装包构建完成！---"
-echo "您可以在 '${OUTPUT_DIR}/${INSTALLER_NAME}.pkg' 找到安装包。"
+echo "--- Nursor 统一安装包构建完成：${OUTPUT_DIR}/${INSTALLER_NAME}.pkg ---"
 
-# 清理临时文件 (可选)
-# rm -rf "$BUILD_DIR"
-echo "临时构建文件已清理。"
+# 提示用户进行下一步操作
+echo "请使用 'sudo installer -pkg \"${OUTPUT_DIR}/${INSTALLER_NAME}.pkg\" -target /' 进行测试安装。"
+echo "安装完成后，请按照上述排查步骤检查 Nursor.app 是否出现在 Launchpad 中。"
 
-exit 0
+# 清理临时文件
+echo "清理临时文件..."
+rm -rf "$BUILD_DIR"

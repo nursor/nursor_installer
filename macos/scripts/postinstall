@@ -5,9 +5,8 @@
 
 echo "Nursor Installer: Running postinstall script..."
 
-# 定义 APP_NAME, CORE_BINARY_NAME, LAUNCHD_PLIST_NAME
+# 定义 CORE_BINARY_NAME, LAUNCHD_PLIST_NAME
 # 这些变量在 build_installer.sh 中定义，但为了 postinstall 脚本的独立性，在此处再次定义。
-APP_NAME="Nursor.app"
 CORE_BINARY_NAME="nursor-core"
 LAUNCHD_PLIST_NAME="org.nursor.nursor-core.plist"
 
@@ -27,72 +26,11 @@ else
 fi
 
 # ====================================================================================
-# 手动强制移动和注册应用程序（作为最后的手段，如果 PackageKit 仍然重定位）
+# 重要提示：
+# 应用程序 (Nursor.app) 的安装和位置应完全由 pkgbuild 命令处理。
+# PackageKit 的“重定位”行为是由于应用程序包内部的元数据导致的，
+# 无法通过 postinstall 脚本手动纠正。
+# 此脚本已移除所有尝试查找、移动或注册 Nursor.app 的逻辑。
 # ====================================================================================
-
-DEST_APP_PATH="/Applications/${APP_NAME}"
-ACTUAL_APP_PATH=""
-
-echo "Nursor Installer: Checking for Nursor.app in final destination: ${DEST_APP_PATH}"
-if [ -d "${DEST_APP_PATH}" ]; then
-    ACTUAL_APP_PATH="${DEST_APP_PATH}"
-    echo "Nursor Installer: Nursor.app is already in /Applications. No manual move needed."
-    echo "Nursor Installer: Contents of ${DEST_APP_PATH}:"
-    ls -lR "${DEST_APP_PATH}"
-else
-    echo "Nursor Installer: Nursor.app not found in /Applications. Searching installer sandbox..."
-
-    # 动态查找活跃的安装沙箱根目录
-    INSTALL_SANDBOX_ROOT=$(find /Library/InstallerSandboxes/.PKInstallSandboxManager -maxdepth 1 -type d -name "*.activeSandbox" -print -quit 2>/dev/null)
-    
-    if [ -n "${INSTALL_SANDBOX_ROOT}" ]; then
-        echo "Nursor Installer: Active Installer Sandbox Root: ${INSTALL_SANDBOX_ROOT}"
-        # 在沙箱的 Root 目录下搜索 Nursor.app，最大深度为 2 (即 Root/Nursor.app 或 Root/Applications/Nursor.app)
-        SANDBOX_APP_PATH=$(find "${INSTALL_SANDBOX_ROOT}/Root" -maxdepth 2 -name "${APP_NAME}" -print -quit 2>/dev/null)
-
-        if [ -d "${SANDBOX_APP_PATH}" ]; then
-            ACTUAL_APP_PATH="${SANDBOX_APP_PATH}"
-            echo "Nursor Installer: Nursor.app found in sandbox at '${ACTUAL_APP_PATH}'."
-            echo "Nursor Installer: Contents of ${ACTUAL_APP_PATH}:"
-            ls -lR "${ACTUAL_APP_PATH}"
-        else
-            echo "ERROR: Nursor.app not found within sandbox's Root directory. Manual relocation skipped."
-        fi
-    else
-        echo "ERROR: Could not find active installer sandbox. Manual relocation skipped."
-    fi
-fi
-
-# 如果找到了应用程序，并且它不在最终目标位置，则尝试移动它
-if [ -d "${ACTUAL_APP_PATH}" ] && [ "${ACTUAL_APP_PATH}" != "${DEST_APP_PATH}" ]; then
-    echo "Nursor Installer: Attempting to move Nursor.app from '${ACTUAL_APP_PATH}' to '${DEST_APP_PATH}'..."
-    # 确保目标目录存在
-    mkdir -p "$(dirname "${DEST_APP_PATH}")"
-    # 移动应用程序
-    mv "${ACTUAL_APP_PATH}" "${DEST_APP_PATH}"
-    if [ $? -eq 0 ]; then
-        echo "Nursor Installer: Nursor.app successfully moved to /Applications."
-        echo "Nursor Installer: Contents of ${DEST_APP_PATH} after move:"
-        ls -lR "${DEST_APP_PATH}"
-
-        # 设置权限
-        echo "Nursor Installer: Setting permissions for Nursor.app..."
-        chown -R 0:0 "${DEST_APP_PATH}"
-        chmod -R 755 "${DEST_APP_PATH}"
-        # 清理扩展属性（再次，以防万一）
-        echo "Nursor Installer: Cleaning extended attributes for Nursor.app in /Applications..."
-        xattr -rc "${DEST_APP_PATH}"
-
-        # 注册应用程序到 Launch Services
-        echo "Nursor Installer: Registering Nursor.app with Launch Services..."
-        /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${DEST_APP_PATH}"
-        killall Dock 2>/dev/null # 重启 Dock 以刷新 Launchpad
-
-    else
-        echo "ERROR: Failed to move Nursor.app from '${ACTUAL_APP_PATH}' to '${DEST_APP_PATH}'. Check permissions or path."
-    fi
-else
-    echo "Nursor Installer: Nursor.app is either already at /Applications or could not be found for manual relocation/move."
-fi
 
 echo "Nursor Installer: Postinstall script finished."
