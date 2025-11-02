@@ -52,6 +52,7 @@ NursorInstaller.exe
 1. 确保以管理员身份运行
 2. 检查 ca.pem 文件是否存在且有效
 3. 手动运行 `certutil -addstore Root ca.pem`
+4. 目前脚本的启动逻辑是，安装结束后自动运行；同时在flutter中也会调用bash命令来提权，来执行trustca的脚本。
 
 ## 测试安装
 

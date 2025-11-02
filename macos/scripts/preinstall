@@ -1,5 +1,18 @@
 #!/bin/bash
 
+# preinstall 脚本将以 root 权限运行
+# 确保这个脚本是可执行的：chmod +x scripts/preinstall
+
+# 加载 Sentry 集成库
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_NAME="preinstall"
+source "${SCRIPT_DIR}/send_to_sentry.sh" 2>/dev/null || true
+
+# 设置错误捕获（如果 Sentry 库加载成功）
+if command -v send_to_sentry >/dev/null 2>&1; then
+    trap 'error_handler' ERR
+fi
+
 set -x
 
 if [ -z "$COMMAND_LINE_INSTALL" ]; then
@@ -9,9 +22,26 @@ else
 fi
 
 # 创建必要的目录
-mkdir -p /usr/local/bin
-mkdir -p /Library/Application Support/Nursor
-mkdir -p /Library/LaunchDaemons
-mkdir -p /var/log
+echo "创建必要的目录..."
+if command -v safe_exec >/dev/null 2>&1; then
+    safe_exec "mkdir -p /usr/local/bin" "创建 /usr/local/bin 目录"
+    safe_exec "mkdir -p /Library/Application Support/Nursor" "创建 Nursor 应用支持目录"
+    safe_exec "mkdir -p /Library/LaunchDaemons" "创建 LaunchDaemons 目录"
+    safe_exec "mkdir -p /var/log" "创建日志目录"
+else
+    # 如果 Sentry 未加载，直接执行
+    mkdir -p /usr/local/bin
+    mkdir -p "/Library/Application Support/Nursor"
+    mkdir -p /Library/LaunchDaemons
+    mkdir -p /var/log
+fi
+
+# 检查是否有错误
+if [ $? -ne 0 ]; then
+    echo "WARNING: 目录创建可能存在问题"
+    if command -v send_to_sentry >/dev/null 2>&1; then
+        send_to_sentry "message" "warning" "Preinstall: 某些目录可能创建失败" "{\"script\": \"preinstall\"}"
+    fi
+fi
 
 exit 0

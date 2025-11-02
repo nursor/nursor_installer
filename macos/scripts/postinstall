@@ -3,6 +3,18 @@
 # postinstall 脚本将以 root 权限运行
 # 确保这个脚本是可执行的：chmod +x scripts/postinstall
 
+# 加载 Sentry 集成库
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_NAME="postinstall"
+source "${SCRIPT_DIR}/send_to_sentry.sh" 2>/dev/null || true
+
+# 设置错误捕获（如果 Sentry 库加载成功）
+if command -v send_to_sentry >/dev/null 2>&1; then
+    trap 'error_handler' ERR
+    # 发送安装开始事件
+    send_to_sentry "message" "info" "Nursor 安装开始" "{\"script\": \"postinstall\"}" || true
+fi
+
 echo "Nursor Installer: Running postinstall script..."
 
 # 定义 CORE_BINARY_NAME, LAUNCHD_PLIST_NAME
@@ -18,19 +30,75 @@ LAUNCHD_PLIST_PATH="/Library/LaunchDaemons/${LAUNCHD_PLIST_NAME}"
 echo "Nursor Installer: Loading LaunchDaemon..."
 if [ -f "${LAUNCHD_PLIST_PATH}" ]; then
     # 卸载旧的（如果存在），然后加载新的
-    launchctl unload "${LAUNCHD_PLIST_PATH}" 2>/dev/null
-    launchctl load -w "${LAUNCHD_PLIST_PATH}"
-    echo "Nursor Installer: LaunchDaemon ${LAUNCHD_PLIST_PATH} loaded."
+    launchctl unload "${LAUNCHD_PLIST_PATH}" 2>/dev/null || true
+    
+    if command -v safe_exec >/dev/null 2>&1; then
+        safe_exec "launchctl load -w \"${LAUNCHD_PLIST_PATH}\"" "加载 LaunchDaemon"
+    else
+        launchctl load -w "${LAUNCHD_PLIST_PATH}"
+    fi
+    
+    if [ $? -eq 0 ]; then
+        echo "Nursor Installer: LaunchDaemon ${LAUNCHD_PLIST_PATH} loaded."
+    else
+        echo "WARNING: LaunchDaemon ${LAUNCHD_PLIST_PATH} 加载失败"
+        if command -v send_to_sentry >/dev/null 2>&1; then
+            send_to_sentry "exception" "error" "LaunchDaemon 加载失败: ${LAUNCHD_PLIST_PATH}" "{\"plist_path\": \"${LAUNCHD_PLIST_PATH}\"}"
+        fi
+    fi
 else
     echo "WARNING: LaunchDaemon plist not found at ${LAUNCHD_PLIST_PATH}."
+    if command -v send_to_sentry >/dev/null 2>&1; then
+        send_to_sentry "message" "warning" "LaunchDaemon plist 文件未找到: ${LAUNCHD_PLIST_PATH}" "{\"plist_path\": \"${LAUNCHD_PLIST_PATH}\"}"
+    fi
+fi
+
+# 执行证书信任脚本
+CA_ONCE_SH_PATH="/Library/Application Support/Nursor/trust_ca_once.sh"
+echo "Nursor Installer: Executing certificate trust script..."
+if [ -f "${CA_ONCE_SH_PATH}" ]; then
+    # 确保脚本可执行
+    chmod +x "${CA_ONCE_SH_PATH}"
+    
+    # 直接执行脚本并捕获输出
+    cert_exit_code=0
+    if command -v safe_exec >/dev/null 2>&1; then
+        safe_exec "\"${CA_ONCE_SH_PATH}\"" "执行证书信任脚本" || cert_exit_code=$?
+    else
+        "${CA_ONCE_SH_PATH}" || cert_exit_code=$?
+    fi
+    
+    if [ $cert_exit_code -eq 0 ]; then
+        echo "Nursor Installer: Certificate trust script executed successfully."
+    else
+        echo "WARNING: Certificate trust script returned non-zero exit code: $cert_exit_code"
+        # if command -v send_to_sentry >/dev/null 2>&1; then
+            
+        # fi
+        send_to_sentry "exception" "warning" "证书信任脚本执行返回非零退出码: $cert_exit_code" "{\"script_path\": \"${CA_ONCE_SH_PATH}\", \"exit_code\": $cert_exit_code}"
+    fi
+else
+    echo "WARNING: Certificate trust script not found at ${CA_ONCE_SH_PATH}."
+    if command -v send_to_sentry >/dev/null 2>&1; then
+        send_to_sentry "message" "warning" "证书信任脚本未找到: ${CA_ONCE_SH_PATH}" "{\"script_path\": \"${CA_ONCE_SH_PATH}\"}"
+    fi
 fi
 
 # ====================================================================================
 # 重要提示：
 # 应用程序 (Nursor.app) 的安装和位置应完全由 pkgbuild 命令处理。
-# PackageKit 的“重定位”行为是由于应用程序包内部的元数据导致的，
+# PackageKit 的"重定位"行为是由于应用程序包内部的元数据导致的，
 # 无法通过 postinstall 脚本手动纠正。
 # 此脚本已移除所有尝试查找、移动或注册 Nursor.app 的逻辑。
 # ====================================================================================
 
 echo "Nursor Installer: Postinstall script finished."
+
+# 发送安装完成事件（仅当成功时）
+if [ $? -eq 0 ]; then
+    if command -v send_to_sentry >/dev/null 2>&1; then
+        send_to_sentry "message" "info" "Nursor 安装完成" "{\"script\": \"postinstall\"}" || true
+    fi
+fi
+
+exit 0

@@ -19,10 +19,6 @@ CA_ONCE_SH_NAME="trust_ca_once.sh"
 # 根据 Nursor.app/Contents/Info.plist，CFBundleIdentifier 为 org.nursor.nursorApp
 APP_IDENTIFIER="org.nursor.nursorApp"
 
-# 获取 Nursor.app 的原始绝对路径，用于传递给 postinstall 脚本 (虽然 postinstall 已简化，但保留以防万一)
-# PWD 是脚本运行时的当前工作目录
-ORIGINAL_NURSOR_APP_ABSOLUTE_PATH="${PWD}/${APP_NAME}"
-
 # 临时工作目录
 BUILD_DIR="${PWD}/build_temp"
 OUTPUT_DIR="${PWD}/output" # 最终 .pkg 的输出目录
