@@ -19,3 +19,4 @@ windows/window_manager_plugin.dll
 windows/flutter_windows.dll
 windows/data
 Output/
+*/cache/*

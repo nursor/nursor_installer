@@ -150,7 +150,7 @@ cat > "${BUILD_DIR}/distribution.xml" <<EOF
 <installer-gui-script minSpecVersion="2.0">
     <title>Nursor Installer</title>
 
-    <options customize="no" require-scripts="true" rootVolumeOnly="true" hostArchitectures="x86_64"/>
+    <options customize="no" require-scripts="true" rootVolumeOnly="true" hostArchitectures="arm64,x86_64"/>
 
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
