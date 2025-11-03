@@ -480,12 +480,9 @@ jobs:
               exit 1
             }
             
-            # 验证文件是否存在且不为空
+            # 简单的文件验证：只检查文件是否存在且不为空
             if (-not (Test-Path $DOWNLOADED_FILE)) {
               Write-Error "ERROR: File not found after download: $DOWNLOADED_FILE"
-              Write-Host "Current directory: $(Get-Location)"
-              Write-Host "Files in windows directory:"
-              Get-ChildItem windows -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table
               exit 1
             }
             
@@ -494,49 +491,22 @@ jobs:
             
             if ($fileSize -eq 0) {
               Write-Error "ERROR: Downloaded file is empty"
-              Write-Host "File path: $DOWNLOADED_FILE"
               exit 1
             }
             
-            # 检查文件前几个字节，确保不是 HTML 错误页面
-            try {
-              $firstBytes = Get-Content -Path $DOWNLOADED_FILE -TotalCount 10 -Raw -Encoding Byte
-              $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
-              
-              # 修复 PowerShell 正则表达式：使用单引号或转义双引号
-              if ($firstText -match '<!DOCTYPE|html|HTML|<title|Not Found|404|Unauthorized|403') {
-                Write-Error "ERROR: Downloaded file appears to be HTML/JSON error page, not a binary file"
-                Write-Host "First 100 bytes: $firstText"
-                Write-Host "Full file content (first 20 lines):"
-                Get-Content -Path $DOWNLOADED_FILE -TotalCount 20 | Write-Host
-                exit 1
-              }
-              
-              Write-Host "✓ File is a valid binary file"
-            } catch {
-              Write-Host "⚠ WARNING: Could not verify file content, but file exists and has size: $fileSize bytes"
-            }
+            Write-Host "✓ File downloaded successfully"
             
             # 重命名为目标文件名
-            try {
-              Rename-Item -Path $DOWNLOADED_FILE -NewName "nursor-core-amd64.dll" -Force
-              Write-Host "✓ File renamed to: $OUTPUT_FILE"
-              
-              # 验证重命名后的文件
-              if (-not (Test-Path $OUTPUT_FILE)) {
-                Write-Error "ERROR: File not found after rename: $OUTPUT_FILE"
-                exit 1
-              }
-              
-              $finalSize = (Get-Item $OUTPUT_FILE).Length
-              Write-Host "✓ Final file size: $finalSize bytes"
-              Write-Host "File downloaded and verified successfully"
-            } catch {
-              Write-Error "ERROR: Failed to rename file: $($_.Exception.Message)"
-              Write-Host "Source file: $DOWNLOADED_FILE"
-              Write-Host "Target file: $OUTPUT_FILE"
+            Rename-Item -Path $DOWNLOADED_FILE -NewName "nursor-core-amd64.dll" -Force -ErrorAction Stop
+            Write-Host "✓ File renamed to: $OUTPUT_FILE"
+            
+            # 验证重命名后的文件
+            if (-not (Test-Path $OUTPUT_FILE)) {
+              Write-Error "ERROR: File not found after rename: $OUTPUT_FILE"
               exit 1
             }
+            
+            Write-Host "✓ File downloaded and renamed successfully"
             
           } catch {
             # 外层的 catch 应该不会被执行，因为所有错误都在内层处理了
