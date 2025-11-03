@@ -100,13 +100,9 @@ jobs:
     needs: detect-version
     strategy:
       matrix:
-        include:
-          - arch: amd64
-            runner: macos-14  # Intel macOS runner
-          - arch: arm64
-            runner: macos-14  # Apple Silicon macOS runner (通常是默认)
+        arch: [amd64, arm64]
       fail-fast: false  # 允许一个失败时不停止其他构建
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14  # GitHub Actions 会根据可用性自动选择架构
     steps:
       - name: Checkout packaging repo
         uses: actions/checkout@v4
@@ -266,26 +262,87 @@ jobs:
       - name: Download nursor-core for Windows
         run: |
           $CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
+          $CORE_REPO="${{ env.CORE_REPO }}"
+          
           New-Item -ItemType Directory -Force -Path windows | Out-Null
           
-          # 下载二进制文件
-          $CORE_URL = "https://github.com/${{ env.CORE_REPO }}/releases/download/$CORE_REF/core-windows-amd64"
-          Invoke-WebRequest -Uri $CORE_URL -OutFile "windows/nursor-core-amd64.dll"
+          # 构建下载 URL
+          $CORE_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/core-windows-amd64"
+          $OUTPUT_FILE = "windows/nursor-core-amd64.dll"
+          
+          Write-Host "Downloading nursor-core from: $CORE_URL"
+          Write-Host "Target file: $OUTPUT_FILE"
+          
+          # 下载二进制文件，添加错误处理
+          try {
+            $response = Invoke-WebRequest -Uri $CORE_URL -OutFile $OUTPUT_FILE -UseBasicParsing -ErrorAction Stop
+            Write-Host "Download completed successfully"
+            
+            # 验证文件是否存在且不为空
+            if (-not (Test-Path $OUTPUT_FILE)) {
+              Write-Error "ERROR: File not found after download: $OUTPUT_FILE"
+              exit 1
+            }
+            
+            $fileSize = (Get-Item $OUTPUT_FILE).Length
+            Write-Host "Downloaded file size: $fileSize bytes"
+            
+            if ($fileSize -eq 0) {
+              Write-Error "ERROR: Downloaded file is empty"
+              exit 1
+            }
+            
+            # 检查文件前几个字节，确保不是 HTML 错误页面
+            $firstBytes = Get-Content -Path $OUTPUT_FILE -TotalCount 5 -Raw -Encoding Byte
+            $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
+            if ($firstText -match "^<!DOCTYPE|<html|<HTML|{\"error\"") {
+              Write-Error "ERROR: Downloaded file appears to be HTML/JSON error page, not a binary file"
+              Write-Host "First bytes: $firstText"
+              Get-Content -Path $OUTPUT_FILE -TotalCount 10 | Write-Host
+              exit 1
+            }
+            
+            Write-Host "File downloaded and verified successfully"
+            
+          } catch {
+            Write-Error "ERROR: Failed to download nursor-core"
+            Write-Error "URL: $CORE_URL"
+            Write-Error "Error: $($_.Exception.Message)"
+            
+            # 如果是 404，提供更明确的错误信息
+            if ($_.Exception.Response.StatusCode -eq 404) {
+              Write-Error "The file was not found. Please check:"
+              Write-Error "  1. Release tag exists: $CORE_REF"
+              Write-Error "  2. Asset name is correct: core-windows-amd64"
+              Write-Error "  3. Repository is correct: $CORE_REPO"
+            }
+            exit 1
+          }
           
           # 尝试下载并验证SHA256 checksum（如果存在）
-          $CHECKSUM_URL = "https://github.com/${{ env.CORE_REPO }}/releases/download/$CORE_REF/core-windows-amd64.sha256"
+          $CHECKSUM_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/core-windows-amd64.sha256"
           try {
-            $checksumContent = Invoke-WebRequest -Uri $CHECKSUM_URL -UseBasicParsing | Select-Object -ExpandProperty Content
+            Write-Host "Checking for SHA256 checksum..."
+            $checksumResponse = Invoke-WebRequest -Uri $CHECKSUM_URL -UseBasicParsing -ErrorAction Stop
+            $checksumContent = $checksumResponse.Content.Trim()
             $expectedHash = ($checksumContent -split '\s+')[0].Trim()
-            $actualHash = (Get-FileHash -Path "windows/nursor-core-amd64.dll" -Algorithm SHA256).Hash.ToLower()
+            
+            Write-Host "Expected SHA256: $expectedHash"
+            
+            $actualHash = (Get-FileHash -Path $OUTPUT_FILE -Algorithm SHA256).Hash.ToLower()
+            Write-Host "Actual SHA256: $actualHash"
+            
             if ($expectedHash.ToLower() -eq $actualHash) {
-              Write-Host "SHA256 checksum verified successfully"
+              Write-Host "✓ SHA256 checksum verified successfully"
             } else {
-              Write-Error "ERROR: SHA256 checksum verification failed. Expected: $expectedHash, Got: $actualHash"
+              Write-Error "ERROR: SHA256 checksum verification failed"
+              Write-Error "Expected: $expectedHash"
+              Write-Error "Got: $actualHash"
               exit 1
             }
           } catch {
-            Write-Host "WARNING: SHA256 checksum file not found, skipping verification"
+            Write-Host "⚠ WARNING: SHA256 checksum file not found, skipping verification"
+            Write-Host "  URL: $CHECKSUM_URL"
           }
       
       - name: Setup Inno Setup
