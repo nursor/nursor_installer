@@ -361,14 +361,31 @@ jobs:
             "Accept" = "application/octet-stream"
           }
           
+          # 验证 token 是否设置（不显示完整 token）
+          if ([string]::IsNullOrEmpty($TOKEN)) {
+            Write-Error "ERROR: PACKAGING_REPO_TOKEN is not set or empty"
+            exit 1
+          }
+          Write-Host "Token is set (length: $($TOKEN.Length) characters)"
+          
           # 下载二进制文件，添加错误处理
           try {
-            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $DOWNLOADED_FILE -UseBasicParsing -ErrorAction Stop
+            Write-Host "Attempting to download from: $CORE_URL"
+            Write-Host "Using authentication headers: Authorization=token ***, Accept=application/octet-stream"
+            
+            # 使用详细错误信息
+            $ErrorActionPreference = "Stop"
+            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $DOWNLOADED_FILE -UseBasicParsing
+            
+            Write-Host "HTTP Status Code: $($response.StatusCode)"
             Write-Host "Download completed successfully"
             
             # 验证文件是否存在且不为空
             if (-not (Test-Path $DOWNLOADED_FILE)) {
               Write-Error "ERROR: File not found after download: $DOWNLOADED_FILE"
+              Write-Host "Current directory: $(Get-Location)"
+              Write-Host "Files in windows directory:"
+              Get-ChildItem windows -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table
               exit 1
             }
             
@@ -377,37 +394,76 @@ jobs:
             
             if ($fileSize -eq 0) {
               Write-Error "ERROR: Downloaded file is empty"
+              Write-Host "File path: $DOWNLOADED_FILE"
               exit 1
             }
             
             # 检查文件前几个字节，确保不是 HTML 错误页面
-            $firstBytes = Get-Content -Path $DOWNLOADED_FILE -TotalCount 5 -Raw -Encoding Byte
+            $firstBytes = Get-Content -Path $DOWNLOADED_FILE -TotalCount 10 -Raw -Encoding Byte
             $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
+            
             # 修复 PowerShell 正则表达式：使用单引号或转义双引号
-            if ($firstText -match '<!DOCTYPE|html|HTML|error') {
+            if ($firstText -match '<!DOCTYPE|html|HTML|<title|Not Found|404|Unauthorized|403') {
               Write-Error "ERROR: Downloaded file appears to be HTML/JSON error page, not a binary file"
-              Write-Host "First bytes: $firstText"
-              Get-Content -Path $DOWNLOADED_FILE -TotalCount 10 | Write-Host
+              Write-Host "First 100 bytes: $firstText"
+              Write-Host "Full file content (first 20 lines):"
+              Get-Content -Path $DOWNLOADED_FILE -TotalCount 20 | Write-Host
               exit 1
             }
+            
+            Write-Host "✓ File is a valid binary file"
             
             # 重命名为目标文件名
             Rename-Item -Path $DOWNLOADED_FILE -NewName "nursor-core-amd64.dll" -Force
             Write-Host "✓ File renamed to: $OUTPUT_FILE"
+            
+            # 验证重命名后的文件
+            if (-not (Test-Path $OUTPUT_FILE)) {
+              Write-Error "ERROR: File not found after rename: $OUTPUT_FILE"
+              exit 1
+            }
+            
+            $finalSize = (Get-Item $OUTPUT_FILE).Length
+            Write-Host "✓ Final file size: $finalSize bytes"
             Write-Host "File downloaded and verified successfully"
             
           } catch {
             Write-Error "ERROR: Failed to download nursor-core"
             Write-Error "URL: $CORE_URL"
-            Write-Error "Error: $($_.Exception.Message)"
+            Write-Error "Error Type: $($_.Exception.GetType().FullName)"
+            Write-Error "Error Message: $($_.Exception.Message)"
             
-            # 如果是 404，提供更明确的错误信息
-            if ($_.Exception.Response.StatusCode -eq 404) {
-              Write-Error "The file was not found. Please check:"
-              Write-Error "  1. Release tag exists: $CORE_REF"
-              Write-Error "  2. Asset name is correct: nursor.dll"
-              Write-Error "  3. Repository is correct: $CORE_REPO"
+            # 检查 HTTP 状态码
+            if ($_.Exception.Response) {
+              $statusCode = [int]$_.Exception.Response.StatusCode
+              Write-Error "HTTP Status Code: $statusCode"
+              
+              # 尝试读取错误响应内容
+              try {
+                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $responseBody = $reader.ReadToEnd()
+                Write-Host "Response body: $responseBody"
+              } catch {
+                Write-Host "Could not read response body"
+              }
+              
+              if ($statusCode -eq 404) {
+                Write-Error "The file was not found (404). Please check:"
+                Write-Error "  1. Release tag exists: $CORE_REF"
+                Write-Error "  2. Asset name is correct: nursor.dll"
+                Write-Error "  3. Repository is correct: $CORE_REPO"
+                Write-Error "  4. Release is not draft: Draft releases may require different access"
+              } elseif ($statusCode -eq 401 -or $statusCode -eq 403) {
+                Write-Error "Authentication failed ($statusCode). Please check:"
+                Write-Error "  1. PACKAGING_REPO_TOKEN is set correctly"
+                Write-Error "  2. Token has 'repo' scope permissions"
+                Write-Error "  3. Token has access to private repository: $CORE_REPO"
+              }
+            } else {
+              Write-Host "No HTTP response available. This might be a network error."
+              Write-Host "Exception details: $($_.Exception | Format-List -Force | Out-String)"
             }
+            
             exit 1
           }
           
