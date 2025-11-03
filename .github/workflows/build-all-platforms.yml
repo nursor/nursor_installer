@@ -346,12 +346,14 @@ jobs:
           
           New-Item -ItemType Directory -Force -Path windows | Out-Null
           
-          # 构建下载 URL
-          $CORE_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/core-windows-amd64"
+          # 构建下载 URL（Windows 版本的文件名是 nursor.dll）
+          $CORE_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/nursor.dll"
+          $DOWNLOADED_FILE = "windows/nursor.dll"
           $OUTPUT_FILE = "windows/nursor-core-amd64.dll"
           
           Write-Host "Downloading nursor-core from: $CORE_URL"
-          Write-Host "Target file: $OUTPUT_FILE"
+          Write-Host "Downloaded file will be saved as: $DOWNLOADED_FILE"
+          Write-Host "Target file (after rename): $OUTPUT_FILE"
           
           # 设置认证头（需要认证，因为 release assets 是私有的）
           $headers = @{
@@ -361,16 +363,16 @@ jobs:
           
           # 下载二进制文件，添加错误处理
           try {
-            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $OUTPUT_FILE -UseBasicParsing -ErrorAction Stop
+            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $DOWNLOADED_FILE -UseBasicParsing -ErrorAction Stop
             Write-Host "Download completed successfully"
             
             # 验证文件是否存在且不为空
-            if (-not (Test-Path $OUTPUT_FILE)) {
-              Write-Error "ERROR: File not found after download: $OUTPUT_FILE"
+            if (-not (Test-Path $DOWNLOADED_FILE)) {
+              Write-Error "ERROR: File not found after download: $DOWNLOADED_FILE"
               exit 1
             }
             
-            $fileSize = (Get-Item $OUTPUT_FILE).Length
+            $fileSize = (Get-Item $DOWNLOADED_FILE).Length
             Write-Host "Downloaded file size: $fileSize bytes"
             
             if ($fileSize -eq 0) {
@@ -379,15 +381,19 @@ jobs:
             }
             
             # 检查文件前几个字节，确保不是 HTML 错误页面
-            $firstBytes = Get-Content -Path $OUTPUT_FILE -TotalCount 5 -Raw -Encoding Byte
+            $firstBytes = Get-Content -Path $DOWNLOADED_FILE -TotalCount 5 -Raw -Encoding Byte
             $firstText = [System.Text.Encoding]::ASCII.GetString($firstBytes)
-            if ($firstText -match "^<!DOCTYPE|<html|<HTML|{\"error\"") {
+            # 修复 PowerShell 正则表达式：使用单引号或转义双引号
+            if ($firstText -match '<!DOCTYPE|html|HTML|error') {
               Write-Error "ERROR: Downloaded file appears to be HTML/JSON error page, not a binary file"
               Write-Host "First bytes: $firstText"
-              Get-Content -Path $OUTPUT_FILE -TotalCount 10 | Write-Host
+              Get-Content -Path $DOWNLOADED_FILE -TotalCount 10 | Write-Host
               exit 1
             }
             
+            # 重命名为目标文件名
+            Rename-Item -Path $DOWNLOADED_FILE -NewName "nursor-core-amd64.dll" -Force
+            Write-Host "✓ File renamed to: $OUTPUT_FILE"
             Write-Host "File downloaded and verified successfully"
             
           } catch {
@@ -399,14 +405,14 @@ jobs:
             if ($_.Exception.Response.StatusCode -eq 404) {
               Write-Error "The file was not found. Please check:"
               Write-Error "  1. Release tag exists: $CORE_REF"
-              Write-Error "  2. Asset name is correct: core-windows-amd64"
+              Write-Error "  2. Asset name is correct: nursor.dll"
               Write-Error "  3. Repository is correct: $CORE_REPO"
             }
             exit 1
           }
           
           # 尝试下载并验证SHA256 checksum（如果存在）
-          $CHECKSUM_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/core-windows-amd64.sha256"
+          $CHECKSUM_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/nursor.dll.sha256"
           try {
             Write-Host "Checking for SHA256 checksum..."
             $checksumHeaders = @{
@@ -536,7 +542,7 @@ jobs:
           Write-Host "✓ Found main executable: $mainExe"
           
           # 验证其他必需文件
-          $requiredFiles = @("logo.ico", "ca.pem", "wintun.dll", "nursor-core-amd64.dll")
+          $requiredFiles = @("logo.ico", "ca.pem", "wintun.dll")
           foreach ($file in $requiredFiles) {
             if (-not (Test-Path $file)) {
               Write-Error "ERROR: Required file not found: $file"
