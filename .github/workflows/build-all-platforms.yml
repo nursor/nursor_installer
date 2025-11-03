@@ -110,8 +110,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'stable'  # 使用最新稳定版本（支持 Dart 3.8.1+）
-          channel: 'stable'
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
           architecture: ${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
           cache: true
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
@@ -245,8 +244,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'stable'  # 使用最新稳定版本（支持 Dart 3.8.1+）
-          channel: 'stable'
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
           cache: true
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
       
@@ -496,8 +494,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'stable'  # 使用最新稳定版本（支持 Dart 3.8.1+）
-          channel: 'stable'
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
           cache: true
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
       
