@@ -546,11 +546,12 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "PATH=$env:PATH;C:\Program Files (x86)\Inno Setup 6"
           
           # 验证安装
-          if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
-            Write-Host "Inno Setup installed successfully"
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /?
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            Write-Host "✓ Inno Setup installed successfully"
+            Write-Host "ISCC.exe path: $isccPath"
           } else {
-            Write-Error "Inno Setup installation failed"
+            Write-Error "Inno Setup installation failed - ISCC.exe not found"
             exit 1
           }
       
