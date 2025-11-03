@@ -163,6 +163,7 @@ jobs:
           # 确保所有必要的文件存在
           echo "检查必需文件..."
           REQUIRED_FILES=(
+            "build_installer.sh"
             "nursor-core"
             "Nursor.app"
             "org.nursor.nursor-core.plist"
@@ -183,6 +184,19 @@ jobs:
           if [ ${#MISSING_FILES[@]} -gt 0 ]; then
             echo "ERROR: 以下必需文件未找到:"
             printf '  - %s\n' "${MISSING_FILES[@]}"
+            echo ""
+            echo "当前目录内容:"
+            ls -lah
+            exit 1
+          fi
+          
+          # 确保 build_installer.sh 有执行权限
+          if [ -f "build_installer.sh" ]; then
+            chmod +x build_installer.sh
+            echo "✓ build_installer.sh 已设置执行权限"
+            ls -l build_installer.sh
+          else
+            echo "ERROR: build_installer.sh 不存在"
             exit 1
           fi
           
@@ -197,7 +211,29 @@ jobs:
         id: build_installer
         working-directory: ./macos
         run: |
+          # 再次确认脚本存在且有执行权限
+          if [ ! -f "build_installer.sh" ]; then
+            echo "ERROR: build_installer.sh not found in current directory"
+            echo "Current directory: $(pwd)"
+            echo "Directory contents:"
+            ls -lah
+            exit 1
+          fi
+          
+          if [ ! -x "build_installer.sh" ]; then
+            echo "Setting execute permission on build_installer.sh"
+            chmod +x build_installer.sh
+          fi
+          
+          echo "Executing build_installer.sh..."
           sudo ./build_installer.sh
+          
+          # 检查输出目录
+          if [ ! -d "output" ]; then
+            echo "ERROR: output directory not created"
+            exit 1
+          fi
+          
           ls -lah output/
           echo "installer_built=true" >> $GITHUB_OUTPUT
       
