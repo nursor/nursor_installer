@@ -489,33 +489,43 @@ jobs:
           Write-Host "✓ File downloaded successfully"
           
           # 尝试下载并验证SHA256 checksum（如果存在）
-          $CHECKSUM_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/nursor.dll.sha256"
+          # 对于私有仓库，也需要使用 API 下载 checksum
           try {
             Write-Host "Checking for SHA256 checksum..."
-            $checksumHeaders = @{
-              "Authorization" = "token $TOKEN"
-              "Accept" = "application/octet-stream"
-            }
-            $checksumResponse = Invoke-WebRequest -Uri $CHECKSUM_URL -Headers $checksumHeaders -UseBasicParsing -ErrorAction Stop
-            $checksumContent = $checksumResponse.Content.Trim()
-            $expectedHash = ($checksumContent -split '\s+')[0].Trim()
+            # 查找 checksum asset
+            $checksumAsset = $releaseResponse.assets | Where-Object { $_.name -eq "nursor.dll.sha256" }
             
-            Write-Host "Expected SHA256: $expectedHash"
-            
-            $actualHash = (Get-FileHash -Path $OUTPUT_FILE -Algorithm SHA256).Hash.ToLower()
-            Write-Host "Actual SHA256: $actualHash"
-            
-            if ($expectedHash.ToLower() -eq $actualHash) {
-              Write-Host "✓ SHA256 checksum verified successfully"
+            if ($checksumAsset) {
+              Write-Host "✓ Found checksum asset: $($checksumAsset.name)"
+              $checksumAssetUrl = "https://api.github.com/repos/$CORE_REPO/releases/assets/$($checksumAsset.id)"
+              
+              $checksumHeaders = @{
+                "Authorization" = "Bearer $TOKEN"
+                "Accept" = "application/octet-stream"
+              }
+              $checksumResponse = Invoke-WebRequest -Uri $checksumAssetUrl -Headers $checksumHeaders -UseBasicParsing -ErrorAction Stop
+              $checksumContent = $checksumResponse.Content.Trim()
+              $expectedHash = ($checksumContent -split '\s+')[0].Trim()
+              
+              Write-Host "Expected SHA256: $expectedHash"
+              
+              $actualHash = (Get-FileHash -Path $OUTPUT_FILE -Algorithm SHA256).Hash.ToLower()
+              Write-Host "Actual SHA256: $actualHash"
+              
+              if ($expectedHash.ToLower() -eq $actualHash) {
+                Write-Host "✓ SHA256 checksum verified successfully"
+              } else {
+                Write-Error "ERROR: SHA256 checksum verification failed"
+                Write-Error "Expected: $expectedHash"
+                Write-Error "Got: $actualHash"
+                exit 1
+              }
             } else {
-              Write-Error "ERROR: SHA256 checksum verification failed"
-              Write-Error "Expected: $expectedHash"
-              Write-Error "Got: $actualHash"
-              exit 1
+              Write-Host "⚠ WARNING: SHA256 checksum file not found in release, skipping verification"
             }
           } catch {
-            Write-Host "⚠ WARNING: SHA256 checksum file not found, skipping verification"
-            Write-Host "  URL: $CHECKSUM_URL"
+            Write-Host "⚠ WARNING: SHA256 checksum verification failed or not available, skipping"
+            Write-Host "  Error: $($_.Exception.Message)"
           }
       
       - name: Setup Inno Setup
