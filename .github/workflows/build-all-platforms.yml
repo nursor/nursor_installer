@@ -100,9 +100,13 @@ jobs:
     needs: detect-version
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: macos-14  # Intel macOS runner
+          - arch: arm64
+            runner: macos-14  # Apple Silicon macOS runner (通常是默认)
       fail-fast: false  # 允许一个失败时不停止其他构建
-    runs-on: macos-14  # 使用最新可用的macOS runner
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout packaging repo
         uses: actions/checkout@v4
@@ -128,12 +132,8 @@ jobs:
         working-directory: ./flutter_app
         run: |
           flutter pub get
-          # 根据架构选择构建目标
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            flutter build macos --release --target-platform=darwin-x64
-          else
-            flutter build macos --release --target-platform=darwin-arm64
-          fi
+          # Flutter 会根据运行器的架构自动构建对应架构的版本
+          flutter build macos --release
           # 复制Nursor.app到构建目录
           cp -R build/macos/Build/Products/Release/Nursor.app ../macos/
       
@@ -523,12 +523,9 @@ jobs:
         working-directory: ./flutter_app
         run: |
           flutter pub get
-          # 根据架构选择构建目标（amd64使用x64，arm64使用aarch64）
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            flutter build linux --release --target-platform=linux-x64
-          else
-            flutter build linux --release --target-platform=linux-arm64
-          fi
+          # Flutter 会根据运行器的架构自动构建对应架构的版本
+          # 注意：GitHub Actions Linux runner 只支持 amd64，所以这里构建 x64 版本
+          flutter build linux --release
       
       - name: Download nursor-core for Linux
         run: |
