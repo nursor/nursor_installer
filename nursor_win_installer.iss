@@ -7,12 +7,12 @@
 ; 4. Creating start menu and optional desktop shortcuts.
 
 #define MyAppName "Nursor App"
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.0"  ; <<-- This will be replaced by CI/CD
 #define MyAppPublisher "Nursor.org"
 #define MyAppURL "https://nursor.org"
 #define MyAppExeName "nursor_app.exe"
-#define MySourcePath "F:\MyProgram\FlutterProgram\nursor\nursor_app\build\windows\x64\runner\Release" ; <<-- IMPORTANT: Verify this path
-#define MyIconPath "F:\MyProgram\GoProgram\nursor\nursor_install\windows\logo.ico" ; <<-- IMPORTANT: Verify this path and ensure logo.ico exists
+#define MySourcePath "."  ; <<-- CI/CD will set this to the build directory
+#define MyIconPath "logo.ico"  ; <<-- Icon should be in MySourcePath directory
 #define GUID "{B7C211E6-630D-4C92-8065-D18C33AA7BE1}" ; <<-- IMPORTANT: This GUID should be unique for your app.
 
 [Setup]

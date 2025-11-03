@@ -99,28 +99,12 @@ jobs:
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
       
       - name: Download Flutter App
-        run: |
-          FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
-          rm -rf flutter_app
-          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
-          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
-            git clone --depth 1 --branch "${FLUTTER_REF}" https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null || {
-              echo "Branch/clone failed, trying with full clone"
-              git clone --depth 1 https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout "${FLUTTER_REF}"
-              cd ..
-            }
-          else
-            # 如果仓库是公开的，可以使用普通 HTTPS
-            if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
-              echo "Branch/clone failed, trying with full clone"
-              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout "${FLUTTER_REF}"
-              cd ..
-            fi
-          fi
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ needs.detect-version.outputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Build Flutter App for macOS
         working-directory: ./flutter_app
@@ -248,30 +232,12 @@ jobs:
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
       
       - name: Download Flutter App
-        run: |
-          $FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
-          Remove-Item -Recurse -Force flutter_app -ErrorAction SilentlyContinue
-          
-          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
-          $token = "${{ secrets.GITHUB_TOKEN }}"
-          if ($token) {
-            git clone --depth 1 --branch $FLUTTER_REF https://$token@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-            if ($LASTEXITCODE -ne 0) {
-              git clone --depth 1 https://$token@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout $FLUTTER_REF
-              cd ..
-            }
-          } else {
-            # 如果仓库是公开的，可以使用普通 HTTPS
-            git clone --depth 1 --branch $FLUTTER_REF https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-            if ($LASTEXITCODE -ne 0) {
-              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout $FLUTTER_REF
-              cd ..
-            }
-          }
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ needs.detect-version.outputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Build Flutter App for Windows
         working-directory: ./flutter_app
@@ -333,40 +299,138 @@ jobs:
       - name: Prepare Windows build environment
         run: |
           # 创建构建目录
-          New-Item -ItemType Directory -Force -Path "windows_build" | Out-Null
+          $buildDir = "windows_build"
+          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
           
           # 检查Flutter构建产物
-          if (-not (Test-Path "flutter_app\build\windows\x64\runner\Release")) {
-            Write-Error "ERROR: Flutter build output not found at flutter_app\build\windows\x64\runner\Release"
+          $flutterBuildPath = "flutter_app\build\windows\x64\runner\Release"
+          if (-not (Test-Path $flutterBuildPath)) {
+            Write-Error "ERROR: Flutter build output not found at $flutterBuildPath"
             exit 1
           }
           
-          # 复制Flutter构建产物到windows目录
-          Copy-Item -Recurse -Force "flutter_app\build\windows\x64\runner\Release\*" "windows_build\" -ErrorAction Stop
+          Write-Host "Copying Flutter build artifacts..."
+          # 复制Flutter构建产物到构建目录
+          Copy-Item -Recurse -Force "$flutterBuildPath\*" "$buildDir\" -ErrorAction Stop
           
-          # 检查nursor-core文件
+          Write-Host "Copying additional files from windows directory..."
+          # 检查并复制nursor-core文件
           if (-not (Test-Path "windows\nursor-core-amd64.dll")) {
-            Write-Error "ERROR: nursor-core-amd64.dll not found"
+            Write-Error "ERROR: nursor-core-amd64.dll not found in windows directory"
+            exit 1
+          }
+          Copy-Item "windows\nursor-core-amd64.dll" "$buildDir\" -ErrorAction Stop
+          
+          # 复制wintun.dll（如果存在，覆盖Flutter构建中的版本）
+          if (Test-Path "windows\wintun.dll") {
+            Copy-Item "windows\wintun.dll" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied wintun.dll from windows directory"
+          } else {
+            Write-Host "WARNING: wintun.dll not found in windows directory, using Flutter build version"
+          }
+          
+          # 复制ca.pem文件（证书文件）
+          if (Test-Path "windows\ca.pem") {
+            Copy-Item "windows\ca.pem" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied ca.pem from windows directory"
+          } else {
+            Write-Error "ERROR: ca.pem not found in windows directory"
             exit 1
           }
           
-          # 复制nursor-core到构建目录
-          Copy-Item "windows\nursor-core-amd64.dll" "windows_build\" -ErrorAction Stop
+          # 复制logo.ico文件（图标文件）
+          if (Test-Path "windows\logo.ico") {
+            Copy-Item "windows\logo.ico" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied logo.ico from windows directory"
+          } else {
+            Write-Error "ERROR: logo.ico not found in windows directory"
+            exit 1
+          }
           
           Write-Host "Windows build environment prepared successfully"
+          Write-Host "Build directory contents:"
+          Get-ChildItem $buildDir | Select-Object Name, Length | Format-Table
       
       - name: Build Windows installer
+        working-directory: ./windows_build
         run: |
-          # 更新Inno Setup脚本中的路径
-          $issFile = Get-Content "nursor_win_installer.iss" -Raw
-          $issFile = $issFile -replace "#define MySourcePath.*", "#define MySourcePath `"$PWD\windows_build`""
-          $issFile = $issFile -replace "#define MyAppVersion.*", "#define MyAppVersion `"${{ needs.detect-version.outputs.version }}`""
+          # 验证必需文件存在并检测可执行文件名
+          Write-Host "Verifying required files in build directory..."
+          
+          # 检查主可执行文件（可能是 nursor_app.exe 或其他名称）
+          $exeFiles = Get-ChildItem -Filter "*.exe" | Where-Object { $_.Name -notlike "*runner*" -and $_.Name -notlike "*flutter*" }
+          if ($exeFiles.Count -eq 0) {
+            Write-Error "ERROR: No main executable file found (.exe)"
+            Write-Host "Available .exe files:"
+            Get-ChildItem -Filter "*.exe" | Select-Object Name | Format-Table
+            exit 1
+          }
+          
+          # 使用找到的第一个 .exe 文件名（通常是主应用）
+          $mainExe = $exeFiles[0].Name
+          Write-Host "✓ Found main executable: $mainExe"
+          
+          # 验证其他必需文件
+          $requiredFiles = @("logo.ico", "ca.pem", "wintun.dll", "nursor-core-amd64.dll")
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path $file)) {
+              Write-Error "ERROR: Required file not found: $file"
+              Write-Host "Available files:"
+              Get-ChildItem | Select-Object Name | Format-Table
+              exit 1
+            }
+            Write-Host "✓ Found: $file"
+          }
+          
+          # 检查 Flutter DLL 文件（可选，如果不存在会警告）
+          $flutterDlls = @("flutter_windows.dll", "nursorcore_plugin.dll", "screen_retriever_plugin.dll", "sentry.dll", "tray_manager_plugin.dll", "window_manager_plugin.dll")
+          foreach ($dll in $flutterDlls) {
+            if (Test-Path $dll) {
+              Write-Host "✓ Found: $dll"
+            } else {
+              Write-Host "⚠ WARNING: Flutter DLL not found: $dll (may be optional)"
+            }
+          }
+          
+          # 准备Inno Setup脚本（复制到构建目录并更新路径）
+          $issFile = Get-Content "..\nursor_win_installer.iss" -Raw
+          
+          # 更新版本号（移除 'v' 前缀如果有）
+          $version = "${{ needs.detect-version.outputs.version }}"
+          if ($version.StartsWith("v")) {
+            $version = $version.Substring(1)
+          }
+          
+          # 更新Inno Setup脚本中的路径、版本和可执行文件名
+          $issFile = $issFile -replace "#define MySourcePath.*", "#define MySourcePath `".`""
+          $issFile = $issFile -replace "#define MyAppVersion.*", "#define MyAppVersion `"$version`""
+          $issFile = $issFile -replace "#define MyIconPath.*", "#define MyIconPath `"logo.ico`""
+          
+          # 更新可执行文件名（如果与默认不同）
+          if ($mainExe -ne "nursor_app.exe") {
+            Write-Host "Updating executable name from nursor_app.exe to $mainExe"
+            $issFile = $issFile -replace "nursor_app\.exe", $mainExe
+            $issFile = $issFile -replace "#define MyAppExeName.*", "#define MyAppExeName `"$mainExe`""
+          }
+          
+          # 保存更新后的脚本到构建目录
           $issFile | Set-Content "nursor_win_installer.iss"
           
-          # 使用完整路径调用 ISCC
+          # 创建输出目录
+          New-Item -ItemType Directory -Force -Path "..\output" | Out-Null
+          
+          # 使用完整路径调用 ISCC（从构建目录）
           $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (Test-Path $isccPath) {
-            & $isccPath nursor_win_installer.iss
+            Write-Host "Building installer with Inno Setup..."
+            & $isccPath "/O..\output" "nursor_win_installer.iss"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Inno Setup compilation failed with exit code: $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "Installer built successfully"
+            Write-Host "Installer output:"
+            Get-ChildItem "..\output" | Select-Object Name, Length | Format-Table
           } else {
             Write-Error "ISCC.exe not found at $isccPath"
             exit 1
@@ -418,28 +482,12 @@ jobs:
           cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
       
       - name: Download Flutter App
-        run: |
-          FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
-          rm -rf flutter_app
-          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
-          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
-            git clone --depth 1 --branch "${FLUTTER_REF}" https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null || {
-              echo "Branch/clone failed, trying with full clone"
-              git clone --depth 1 https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout "${FLUTTER_REF}"
-              cd ..
-            }
-          else
-            # 如果仓库是公开的，可以使用普通 HTTPS
-            if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
-              echo "Branch/clone failed, trying with full clone"
-              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-              cd flutter_app
-              git checkout "${FLUTTER_REF}"
-              cd ..
-            fi
-          fi
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ needs.detect-version.outputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install Linux build dependencies
         run: |
