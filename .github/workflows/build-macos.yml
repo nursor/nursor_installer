@@ -1,0 +1,46 @@
+name: Build macOS
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure build script exists
+        run: |
+          chmod +x ./build_installer.sh || true
+          if [ ! -x ./build_installer.sh ]; then
+            echo "❌ build_installer.sh missing or not executable"
+            exit 1
+          fi
+
+      - name: Run macOS build
+        run: |
+          echo "Building for ${{ matrix.arch }}..."
+          sudo -v || echo "sudo not available, continuing"
+          ./build_installer.sh ${{ matrix.arch }} $VERSION
+
+      - name: Collect artifacts
+        run: mkdir -p output && mv build/*.dmg output/ || true
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/*.dmg
+          tag_name: ${{ github.ref_name }}
+          append_body: true

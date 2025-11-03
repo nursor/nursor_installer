@@ -1,0 +1,23 @@
+name: Trigger Installer Build
+
+on:
+  push:
+    tags:
+      - 'v*'  # 任何 v 开头的 tag，比如 v1.0.0
+
+jobs:
+  trigger-installer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger nursor_installer build
+        env:
+          REPO: nursor/nursor_installer
+          VERSION: ${{ github.ref_name }}
+          TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+        run: |
+          echo "Triggering build for $REPO with version $VERSION"
+          curl -X POST "https://api.github.com/repos/$REPO/dispatches" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -d "{\"event_type\":\"build-trigger\",\"client_payload\":{\"version\":\"$VERSION\"}}"

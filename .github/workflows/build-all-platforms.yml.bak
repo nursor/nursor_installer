@@ -148,7 +148,7 @@ jobs:
           CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}.sha256"
           if curl -fsSL "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
             echo "Verifying SHA256 checksum..."
-            (cd macos && sha256sum -c --quiet <(cat /tmp/checksum.sha256 | tr -d '\r\n' | awk '{print $1"  nursor-core"}')) || {
+            (cd macos && echo "$(cat /tmp/checksum.sha256 | awk '{print $1}')  nursor-core" | shasum -a 256 -c) || {
               echo "ERROR: SHA256 checksum verification failed"
               exit 1
             }
@@ -211,30 +211,56 @@ jobs:
         id: build_installer
         working-directory: ./macos
         run: |
+          # 获取当前绝对路径
+          MACOS_DIR="$(pwd)"
+          SCRIPT_PATH="${MACOS_DIR}/build_installer.sh"
+          
+          echo "Current directory: $MACOS_DIR"
+          echo "Script path: $SCRIPT_PATH"
+          
           # 再次确认脚本存在且有执行权限
-          if [ ! -f "build_installer.sh" ]; then
-            echo "ERROR: build_installer.sh not found in current directory"
-            echo "Current directory: $(pwd)"
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "ERROR: build_installer.sh not found at $SCRIPT_PATH"
+            echo "Current directory: $MACOS_DIR"
             echo "Directory contents:"
             ls -lah
             exit 1
           fi
           
-          if [ ! -x "build_installer.sh" ]; then
+          # 确保脚本有执行权限
+          if [ ! -x "$SCRIPT_PATH" ]; then
             echo "Setting execute permission on build_installer.sh"
-            chmod +x build_installer.sh
+            chmod +x "$SCRIPT_PATH"
           fi
           
-          echo "Executing build_installer.sh..."
-          sudo ./build_installer.sh
+          # 显示脚本权限信息
+          echo "Script permissions:"
+          ls -l "$SCRIPT_PATH"
           
-          # 检查输出目录
-          if [ ! -d "output" ]; then
-            echo "ERROR: output directory not created"
+          # 验证脚本可执行
+          if [ ! -x "$SCRIPT_PATH" ]; then
+            echo "ERROR: build_installer.sh is not executable"
             exit 1
           fi
           
-          ls -lah output/
+          # 使用绝对路径执行脚本（sudo 可能无法找到相对路径）
+          echo "Executing build_installer.sh with absolute path..."
+          sudo "$SCRIPT_PATH"
+          
+          # 检查脚本执行结果
+          if [ $? -ne 0 ]; then
+            echo "ERROR: build_installer.sh failed with exit code $?"
+            exit 1
+          fi
+          
+          # 检查输出目录
+          if [ ! -d "${MACOS_DIR}/output" ]; then
+            echo "ERROR: output directory not created at ${MACOS_DIR}/output"
+            exit 1
+          fi
+          
+          echo "✓ Installer built successfully"
+          ls -lah "${MACOS_DIR}/output/"
           echo "installer_built=true" >> $GITHUB_OUTPUT
       
       - name: Record build status
@@ -648,31 +674,61 @@ jobs:
         id: package_installer
         run: |
           ARCH="${{ matrix.arch }}"
-          PACKAGE_VERSION="${{ needs.detect-version.outputs.version }}"
+          RAW_VERSION="${{ needs.detect-version.outputs.version }}"
           
-          # 创建AppImage或deb包的结构
-          mkdir -p linux_appimage/usr/bin
-          mkdir -p linux_appimage/usr/share/applications
-          mkdir -p linux_appimage/usr/share/icons
+          # 清理版本号：移除 'v' 前缀和其他特殊字符
+          PACKAGE_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/[^a-zA-Z0-9._-]//g')
           
-          # 根据架构选择正确的构建输出路径
-          if [ "$ARCH" = "amd64" ]; then
-            BUILD_PATH="x64"
-          else
-            BUILD_PATH="arm64"
-          fi
+          echo "Raw version: $RAW_VERSION"
+          echo "Cleaned version: $PACKAGE_VERSION"
           
-          # 复制Flutter构建产物
-          if [ -d "flutter_app/build/linux/${BUILD_PATH}/release/bundle" ]; then
-            cp -R flutter_app/build/linux/${BUILD_PATH}/release/bundle/* linux_appimage/
-          else
-            echo "ERROR: Flutter build output not found at flutter_app/build/linux/${BUILD_PATH}/release/bundle"
+          # 创建输出目录（使用绝对路径确保存在）
+          OUTPUT_DIR="$(pwd)/output"
+          mkdir -p "$OUTPUT_DIR"
+          
+          # 验证输出目录是否创建成功
+          if [ ! -d "$OUTPUT_DIR" ]; then
+            echo "ERROR: Failed to create output directory: $OUTPUT_DIR"
             exit 1
           fi
-          cp linux/nursor-core linux_appimage/nursor-core
+          echo "Output directory: $OUTPUT_DIR"
+          
+          # 创建临时打包目录
+          TEMP_DIR="$(pwd)/linux_appimage"
+          mkdir -p "$TEMP_DIR/usr/bin"
+          mkdir -p "$TEMP_DIR/usr/share/applications"
+          mkdir -p "$TEMP_DIR/usr/share/icons"
+          
+          # Flutter Linux 构建输出路径（GitHub Actions Linux runner 通常是 x64）
+          # Flutter 会自动构建到 build/linux/x64/release/bundle
+          FLUTTER_BUILD_PATH="flutter_app/build/linux/x64/release/bundle"
+          
+          # 检查 Flutter 构建输出是否存在
+          if [ ! -d "$FLUTTER_BUILD_PATH" ]; then
+            echo "ERROR: Flutter build output not found at $FLUTTER_BUILD_PATH"
+            echo "Current directory: $(pwd)"
+            echo "Available directories in flutter_app/build/linux:"
+            find flutter_app/build/linux -type d -maxdepth 3 2>/dev/null || echo "Directory flutter_app/build/linux not found"
+            exit 1
+          fi
+          
+          echo "Copying Flutter build artifacts from $FLUTTER_BUILD_PATH..."
+          cp -R "$FLUTTER_BUILD_PATH"/* "$TEMP_DIR/"
+          
+          # 复制 nursor-core 二进制文件
+          if [ ! -f "linux/nursor-core" ]; then
+            echo "ERROR: nursor-core not found in linux/ directory"
+            echo "Current directory: $(pwd)"
+            echo "Files in linux directory:"
+            ls -lah linux/ 2>/dev/null || echo "linux directory does not exist"
+            exit 1
+          fi
+          cp linux/nursor-core "$TEMP_DIR/nursor-core"
+          chmod +x "$TEMP_DIR/nursor-core"
           
           # 创建.desktop文件
-          cat > linux_appimage/usr/share/applications/nursor.desktop <<EOF
+          mkdir -p "$TEMP_DIR/usr/share/applications"
+          cat > "$TEMP_DIR/usr/share/applications/nursor.desktop" <<'EOF'
           [Desktop Entry]
           Version=1.0
           Type=Application
@@ -682,9 +738,46 @@ jobs:
           Categories=Utility;
           EOF
           
-          # 创建tar.gz包（简化版）
-          tar -czf output/nursor-linux-${ARCH}-${PACKAGE_VERSION}.tar.gz -C linux_appimage .
+          # 验证打包内容
+          echo "Package contents in $TEMP_DIR:"
+          ls -lah "$TEMP_DIR" | head -20
+          echo ""
+          
+          # 创建tar.gz包（使用完整路径）
+          PACKAGE_NAME="nursor-linux-${ARCH}-${PACKAGE_VERSION}.tar.gz"
+          OUTPUT_PATH="${OUTPUT_DIR}/${PACKAGE_NAME}"
+          
+          echo "Creating package: $OUTPUT_PATH"
+          echo "Source directory: $TEMP_DIR"
+          
+          # 确保在正确的目录执行 tar 命令
+          cd "$TEMP_DIR" || exit 1
+          
+          # 创建 tar.gz 包
+          if tar -czf "$OUTPUT_PATH" . 2>&1; then
+            echo "✓ tar command completed successfully"
+          else
+            echo "ERROR: tar command failed"
+            exit 1
+          fi
+          
+          # 返回原始目录
+          cd - > /dev/null
+          
+          # 验证文件是否创建成功
+          if [ ! -f "$OUTPUT_PATH" ]; then
+            echo "ERROR: Package file not created: $OUTPUT_PATH"
+            echo "Output directory contents:"
+            ls -lah "$OUTPUT_DIR" || echo "Output directory does not exist"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s "$OUTPUT_PATH" 2>/dev/null || echo "unknown")
+          echo "✓ Package created successfully: $OUTPUT_PATH (size: $FILE_SIZE bytes)"
+          ls -lh "$OUTPUT_PATH"
+          
           echo "package_created=true" >> $GITHUB_OUTPUT
+          echo "package_path=$OUTPUT_PATH" >> $GITHUB_OUTPUT
       
       - name: Record build status
         if: always()
