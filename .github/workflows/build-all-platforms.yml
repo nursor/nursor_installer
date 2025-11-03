@@ -137,24 +137,41 @@ jobs:
         run: |
           CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
           ARCH="${{ matrix.arch }}"
+          TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
           mkdir -p macos
           
-          # 下载二进制文件
+          # 下载二进制文件（需要认证，因为 release assets 是私有的）
           CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}"
-          curl -L -o macos/nursor-core "${CORE_URL}"
+          echo "Downloading nursor-core from: $CORE_URL"
+          
+          curl -L \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o macos/nursor-core \
+            "${CORE_URL}"
+          
+          if [ ! -f "macos/nursor-core" ] || [ ! -s "macos/nursor-core" ]; then
+            echo "ERROR: Failed to download nursor-core or file is empty"
+            exit 1
+          fi
+          
           chmod +x macos/nursor-core
+          echo "✓ nursor-core downloaded successfully"
           
           # 尝试下载并验证SHA256 checksum（如果存在）
           CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}.sha256"
-          if curl -fsSL "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+          if curl -fsSL \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
             echo "Verifying SHA256 checksum..."
             (cd macos && echo "$(cat /tmp/checksum.sha256 | awk '{print $1}')  nursor-core" | shasum -a 256 -c) || {
               echo "ERROR: SHA256 checksum verification failed"
               exit 1
             }
-            echo "SHA256 checksum verified successfully"
+            echo "✓ SHA256 checksum verified successfully"
           else
-            echo "WARNING: SHA256 checksum file not found, skipping verification"
+            echo "⚠ WARNING: SHA256 checksum file not found, skipping verification"
           fi
       
       - name: Prepare macOS build environment
@@ -325,6 +342,7 @@ jobs:
         run: |
           $CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
           $CORE_REPO="${{ env.CORE_REPO }}"
+          $TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
           
           New-Item -ItemType Directory -Force -Path windows | Out-Null
           
@@ -335,9 +353,15 @@ jobs:
           Write-Host "Downloading nursor-core from: $CORE_URL"
           Write-Host "Target file: $OUTPUT_FILE"
           
+          # 设置认证头（需要认证，因为 release assets 是私有的）
+          $headers = @{
+            "Authorization" = "token $TOKEN"
+            "Accept" = "application/octet-stream"
+          }
+          
           # 下载二进制文件，添加错误处理
           try {
-            $response = Invoke-WebRequest -Uri $CORE_URL -OutFile $OUTPUT_FILE -UseBasicParsing -ErrorAction Stop
+            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $OUTPUT_FILE -UseBasicParsing -ErrorAction Stop
             Write-Host "Download completed successfully"
             
             # 验证文件是否存在且不为空
@@ -385,7 +409,11 @@ jobs:
           $CHECKSUM_URL = "https://github.com/$CORE_REPO/releases/download/$CORE_REF/core-windows-amd64.sha256"
           try {
             Write-Host "Checking for SHA256 checksum..."
-            $checksumResponse = Invoke-WebRequest -Uri $CHECKSUM_URL -UseBasicParsing -ErrorAction Stop
+            $checksumHeaders = @{
+              "Authorization" = "token $TOKEN"
+              "Accept" = "application/octet-stream"
+            }
+            $checksumResponse = Invoke-WebRequest -Uri $CHECKSUM_URL -Headers $checksumHeaders -UseBasicParsing -ErrorAction Stop
             $checksumContent = $checksumResponse.Content.Trim()
             $expectedHash = ($checksumContent -split '\s+')[0].Trim()
             
@@ -650,24 +678,41 @@ jobs:
         run: |
           CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
           ARCH="${{ matrix.arch }}"
+          TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
           mkdir -p linux
           
-          # 下载二进制文件
+          # 下载二进制文件（需要认证，因为 release assets 是私有的）
           CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}"
-          curl -L -o linux/nursor-core "${CORE_URL}"
+          echo "Downloading nursor-core from: $CORE_URL"
+          
+          curl -L \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o linux/nursor-core \
+            "${CORE_URL}"
+          
+          if [ ! -f "linux/nursor-core" ] || [ ! -s "linux/nursor-core" ]; then
+            echo "ERROR: Failed to download nursor-core or file is empty"
+            exit 1
+          fi
+          
           chmod +x linux/nursor-core
+          echo "✓ nursor-core downloaded successfully"
           
           # 尝试下载并验证SHA256 checksum（如果存在）
           CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}.sha256"
-          if curl -fsSL "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+          if curl -fsSL \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
             echo "Verifying SHA256 checksum..."
             (cd linux && sha256sum -c --quiet <(cat /tmp/checksum.sha256 | tr -d '\r\n' | awk '{print $1"  nursor-core"}')) || {
               echo "ERROR: SHA256 checksum verification failed"
               exit 1
             }
-            echo "SHA256 checksum verified successfully"
+            echo "✓ SHA256 checksum verified successfully"
           else
-            echo "WARNING: SHA256 checksum file not found, skipping verification"
+            echo "⚠ WARNING: SHA256 checksum file not found, skipping verification"
           fi
       
       - name: Package Linux installer
