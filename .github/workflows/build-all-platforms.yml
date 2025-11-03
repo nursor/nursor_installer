@@ -642,7 +642,7 @@ jobs:
           }
           
           # 检查 Flutter DLL 文件（可选，如果不存在会警告）
-          $flutterDlls = @("flutter_windows.dll", "nursorcore_plugin.dll", "screen_retriever_plugin.dll", "sentry.dll", "tray_manager_plugin.dll", "window_manager_plugin.dll")
+          $flutterDlls = @("flutter_windows.dll", "nursorcore_plugin.dll", "screen_retriever_plugin.dll",  "tray_manager_plugin.dll", "window_manager_plugin.dll")
           foreach ($dll in $flutterDlls) {
             if (Test-Path $dll) {
               Write-Host "✓ Found: $dll"
