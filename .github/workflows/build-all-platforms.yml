@@ -355,12 +355,6 @@ jobs:
           Write-Host "Downloaded file will be saved as: $DOWNLOADED_FILE"
           Write-Host "Target file (after rename): $OUTPUT_FILE"
           
-          # 设置认证头（需要认证，因为 release assets 是私有的）
-          $headers = @{
-            "Authorization" = "token $TOKEN"
-            "Accept" = "application/octet-stream"
-          }
-          
           # 验证 token 是否设置（不显示完整 token）
           if ([string]::IsNullOrEmpty($TOKEN)) {
             Write-Error "ERROR: PACKAGING_REPO_TOKEN is not set or empty"
@@ -368,14 +362,59 @@ jobs:
           }
           Write-Host "Token is set (length: $($TOKEN.Length) characters)"
           
-          # 下载二进制文件，添加错误处理
+          # 对于私有仓库的 release assets，需要使用 GitHub API 下载
+          # 步骤1：使用 API 获取 asset ID
+          Write-Host "Step 1: Fetching release asset information via GitHub API..."
+          $apiUrl = "https://api.github.com/repos/$CORE_REPO/releases/tags/$CORE_REF"
+          $apiHeaders = @{
+            "Authorization" = "Bearer $TOKEN"
+            "Accept" = "application/vnd.github.v3+json"
+            "User-Agent" = "GitHub-Actions"
+          }
+          
           try {
-            Write-Host "Attempting to download from: $CORE_URL"
-            Write-Host "Using authentication headers: Authorization=token ***, Accept=application/octet-stream"
+            Write-Host "Calling GitHub API: $apiUrl"
+            $releaseResponse = Invoke-RestMethod -Uri $apiUrl -Headers $apiHeaders -Method Get
+            Write-Host "✓ Release found: $($releaseResponse.name)"
+            Write-Host "Release ID: $($releaseResponse.id)"
+            Write-Host "Assets count: $($releaseResponse.assets.Count)"
+            
+            # 查找名为 nursor.dll 的 asset
+            $asset = $releaseResponse.assets | Where-Object { $_.name -eq "nursor.dll" }
+            
+            if (-not $asset) {
+              Write-Error "ERROR: Asset 'nursor.dll' not found in release $CORE_REF"
+              Write-Host "Available assets in this release:"
+              if ($releaseResponse.assets.Count -eq 0) {
+                Write-Host "  (no assets found)"
+              } else {
+                $releaseResponse.assets | ForEach-Object { Write-Host "  - $($_.name) (ID: $($_.id))" }
+              }
+              exit 1
+            }
+            
+            Write-Host "✓ Found asset: $($asset.name) (ID: $($asset.id), Size: $($asset.size) bytes)"
+            
+            # 对于私有仓库，必须使用 API 下载端点，不能直接使用 browser_download_url
+            # API 下载端点格式：https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}
+            # 这个端点需要认证，而 browser_download_url 可能不需要认证但会失败
+            $assetUrl = "https://api.github.com/repos/$CORE_REPO/releases/assets/$($asset.id)"
+            Write-Host "Using API download endpoint: $assetUrl"
+            
+            # 步骤2：使用 API 下载 asset（需要认证）
+            Write-Host "Step 2: Downloading asset from: $assetUrl"
+            $downloadHeaders = @{
+              "Authorization" = "Bearer $TOKEN"
+              "Accept" = "application/octet-stream"
+              "User-Agent" = "GitHub-Actions"
+            }
+            
+            # 下载二进制文件，添加错误处理
+            Write-Host "Using authentication headers: Authorization=Bearer ***, Accept=application/octet-stream"
             
             # 使用详细错误信息
             $ErrorActionPreference = "Stop"
-            $response = Invoke-WebRequest -Uri $CORE_URL -Headers $headers -OutFile $DOWNLOADED_FILE -UseBasicParsing
+            $response = Invoke-WebRequest -Uri $assetUrl -Headers $downloadHeaders -OutFile $DOWNLOADED_FILE -UseBasicParsing
             
             Write-Host "HTTP Status Code: $($response.StatusCode)"
             Write-Host "Download completed successfully"
@@ -428,42 +467,112 @@ jobs:
             Write-Host "File downloaded and verified successfully"
             
           } catch {
-            Write-Error "ERROR: Failed to download nursor-core"
-            Write-Error "URL: $CORE_URL"
-            Write-Error "Error Type: $($_.Exception.GetType().FullName)"
-            Write-Error "Error Message: $($_.Exception.Message)"
-            
-            # 检查 HTTP 状态码
-            if ($_.Exception.Response) {
-              $statusCode = [int]$_.Exception.Response.StatusCode
-              Write-Error "HTTP Status Code: $statusCode"
+            # 检查是否是 API 调用失败（获取 release 信息）
+            if ($_.Exception.Message -match "API" -or $apiUrl) {
+              Write-Host "=========================================="
+              Write-Host "API ERROR DETAILS"
+              Write-Host "=========================================="
+              Write-Error "ERROR: Failed to fetch release information from GitHub API"
+              Write-Host "API URL: $apiUrl"
+              Write-Host "Error Type: $($_.Exception.GetType().FullName)"
+              Write-Host "Error Message: $($_.Exception.Message)"
               
-              # 尝试读取错误响应内容
-              try {
-                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-                $responseBody = $reader.ReadToEnd()
-                Write-Host "Response body: $responseBody"
-              } catch {
-                Write-Host "Could not read response body"
+              # 检查 HTTP 状态码
+              if ($_.Exception -is [System.Net.WebException]) {
+                $webException = $_.Exception
+                if ($webException.Response) {
+                  $statusCode = [int]$webException.Response.StatusCode
+                  Write-Host "HTTP Status Code: $statusCode"
+                  
+                  if ($statusCode -eq 404) {
+                    Write-Host "Release tag not found: $CORE_REF"
+                    Write-Host "Please check if the release tag exists in repository: $CORE_REPO"
+                  } elseif ($statusCode -eq 401 -or $statusCode -eq 403) {
+                    Write-Host "Authentication failed. Token may not have access to repository: $CORE_REPO"
+                    Write-Host "Please verify PACKAGING_REPO_TOKEN has 'repo' scope and access to this repository"
+                  }
+                }
               }
-              
-              if ($statusCode -eq 404) {
-                Write-Error "The file was not found (404). Please check:"
-                Write-Error "  1. Release tag exists: $CORE_REF"
-                Write-Error "  2. Asset name is correct: nursor.dll"
-                Write-Error "  3. Repository is correct: $CORE_REPO"
-                Write-Error "  4. Release is not draft: Draft releases may require different access"
-              } elseif ($statusCode -eq 401 -or $statusCode -eq 403) {
-                Write-Error "Authentication failed ($statusCode). Please check:"
-                Write-Error "  1. PACKAGING_REPO_TOKEN is set correctly"
-                Write-Error "  2. Token has 'repo' scope permissions"
-                Write-Error "  3. Token has access to private repository: $CORE_REPO"
-              }
-            } else {
-              Write-Host "No HTTP response available. This might be a network error."
-              Write-Host "Exception details: $($_.Exception | Format-List -Force | Out-String)"
+              Write-Host "=========================================="
+              exit 1
             }
             
+            # 下载错误
+            Write-Host "=========================================="
+            Write-Host "DOWNLOAD ERROR DETAILS"
+            Write-Host "=========================================="
+            Write-Error "ERROR: Failed to download nursor-core asset"
+            Write-Host "Asset URL: $assetUrl"
+            Write-Host "Error Type: $($_.Exception.GetType().FullName)"
+            Write-Host "Error Message: $($_.Exception.Message)"
+            
+            # 检查是否有 WebException（HTTP 错误）
+            if ($_.Exception -is [System.Net.WebException]) {
+              $webException = $_.Exception
+              Write-Host "WebException Status: $($webException.Status)"
+              
+              # 尝试获取 HTTP 响应
+              if ($webException.Response) {
+                $httpResponse = $webException.Response
+                $statusCode = [int]$httpResponse.StatusCode
+                $statusDescription = $httpResponse.StatusDescription
+                
+                Write-Host "HTTP Status Code: $statusCode"
+                Write-Host "HTTP Status Description: $statusDescription"
+                
+                # 尝试读取错误响应内容
+                try {
+                  $responseStream = $httpResponse.GetResponseStream()
+                  $reader = New-Object System.IO.StreamReader($responseStream)
+                  $responseBody = $reader.ReadToEnd()
+                  $reader.Close()
+                  $responseStream.Close()
+                  
+                  Write-Host "Response body:"
+                  Write-Host $responseBody
+                  Write-Host "------------------------------------------"
+                } catch {
+                  Write-Host "Could not read response body: $($_.Exception.Message)"
+                }
+                
+                # 根据状态码提供诊断信息
+                if ($statusCode -eq 404) {
+                  Write-Host ""
+                  Write-Host "404 NOT FOUND - File not found. Please check:"
+                  Write-Host "  1. Release tag exists: $CORE_REF"
+                  Write-Host "  2. Asset name is correct: nursor.dll"
+                  Write-Host "  3. Repository is correct: $CORE_REPO"
+                  Write-Host "  4. Release is not draft (draft releases may require different access)"
+                  Write-Host "  5. Try accessing the release page manually: https://github.com/$CORE_REPO/releases/tag/$CORE_REF"
+                } elseif ($statusCode -eq 401) {
+                  Write-Host ""
+                  Write-Host "401 UNAUTHORIZED - Authentication failed. Please check:"
+                  Write-Host "  1. PACKAGING_REPO_TOKEN is set correctly in repository secrets"
+                  Write-Host "  2. Token has 'repo' scope permissions"
+                  Write-Host "  3. Token has not expired"
+                  Write-Host "  4. Token format is correct (classic token, not fine-grained)"
+                } elseif ($statusCode -eq 403) {
+                  Write-Host ""
+                  Write-Host "403 FORBIDDEN - Access denied. Please check:"
+                  Write-Host "  1. Token has 'repo' scope permissions"
+                  Write-Host "  2. Token has access to private repository: $CORE_REPO"
+                  Write-Host "  3. Token owner has access to the repository"
+                  Write-Host "  4. Repository is not archived or restricted"
+                } elseif ($statusCode -eq 500 -or $statusCode -eq 502 -or $statusCode -eq 503) {
+                  Write-Host ""
+                  Write-Host "Server error ($statusCode) - GitHub may be experiencing issues"
+                  Write-Host "Please try again later"
+                }
+              } else {
+                Write-Host "No HTTP response available (network error or timeout)"
+              }
+            } else {
+              Write-Host "Exception is not a WebException"
+              Write-Host "Full exception details:"
+              Write-Host ($_.Exception | Format-List -Force | Out-String)
+            }
+            
+            Write-Host "=========================================="
             exit 1
           }
           
