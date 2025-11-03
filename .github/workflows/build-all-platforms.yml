@@ -102,12 +102,24 @@ jobs:
         run: |
           FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
           rm -rf flutter_app
-          if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
-            echo "Branch/clone failed, trying with full clone"
-            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-            cd flutter_app
-            git checkout "${FLUTTER_REF}"
-            cd ..
+          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
+          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+            git clone --depth 1 --branch "${FLUTTER_REF}" https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null || {
+              echo "Branch/clone failed, trying with full clone"
+              git clone --depth 1 https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout "${FLUTTER_REF}"
+              cd ..
+            }
+          else
+            # 如果仓库是公开的，可以使用普通 HTTPS
+            if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
+              echo "Branch/clone failed, trying with full clone"
+              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout "${FLUTTER_REF}"
+              cd ..
+            fi
           fi
       
       - name: Build Flutter App for macOS
@@ -239,12 +251,26 @@ jobs:
         run: |
           $FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
           Remove-Item -Recurse -Force flutter_app -ErrorAction SilentlyContinue
-          git clone --depth 1 --branch $FLUTTER_REF https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-          if ($LASTEXITCODE -ne 0) {
-            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-            cd flutter_app
-            git checkout $FLUTTER_REF
-            cd ..
+          
+          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
+          $token = "${{ secrets.GITHUB_TOKEN }}"
+          if ($token) {
+            git clone --depth 1 --branch $FLUTTER_REF https://$token@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+            if ($LASTEXITCODE -ne 0) {
+              git clone --depth 1 https://$token@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout $FLUTTER_REF
+              cd ..
+            }
+          } else {
+            # 如果仓库是公开的，可以使用普通 HTTPS
+            git clone --depth 1 --branch $FLUTTER_REF https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+            if ($LASTEXITCODE -ne 0) {
+              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout $FLUTTER_REF
+              cd ..
+            }
           }
       
       - name: Build Flutter App for Windows
@@ -279,7 +305,30 @@ jobs:
           }
       
       - name: Setup Inno Setup
-        uses: ilexn/innosetup-action@v1.0.1
+        run: |
+          # 下载并安装 Inno Setup
+          $innosetupVersion = "6.2.2"
+          $innosetupUrl = "https://files.jrsoftware.org/is/6/innosetup-$innosetupVersion.exe"
+          $installerPath = "$env:TEMP\innosetup-installer.exe"
+          
+          Write-Host "Downloading Inno Setup $innosetupVersion..."
+          Invoke-WebRequest -Uri $innosetupUrl -OutFile $installerPath
+          
+          Write-Host "Installing Inno Setup..."
+          Start-Process -FilePath $installerPath -ArgumentList "/SILENT", "/DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
+          
+          Write-Host "Adding Inno Setup to PATH..."
+          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
+          Add-Content -Path $env:GITHUB_ENV -Value "PATH=$env:PATH;C:\Program Files (x86)\Inno Setup 6"
+          
+          # 验证安装
+          if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+            Write-Host "Inno Setup installed successfully"
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /?
+          } else {
+            Write-Error "Inno Setup installation failed"
+            exit 1
+          }
       
       - name: Prepare Windows build environment
         run: |
@@ -314,7 +363,14 @@ jobs:
           $issFile = $issFile -replace "#define MyAppVersion.*", "#define MyAppVersion `"${{ needs.detect-version.outputs.version }}`""
           $issFile | Set-Content "nursor_win_installer.iss"
           
-          iscc nursor_win_installer.iss
+          # 使用完整路径调用 ISCC
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            & $isccPath nursor_win_installer.iss
+          } else {
+            Write-Error "ISCC.exe not found at $isccPath"
+            exit 1
+          }
       
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -365,12 +421,24 @@ jobs:
         run: |
           FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
           rm -rf flutter_app
-          if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
-            echo "Branch/clone failed, trying with full clone"
-            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
-            cd flutter_app
-            git checkout "${FLUTTER_REF}"
-            cd ..
+          # 使用 GITHUB_TOKEN 进行身份验证（如果仓库是私有的）
+          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+            git clone --depth 1 --branch "${FLUTTER_REF}" https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null || {
+              echo "Branch/clone failed, trying with full clone"
+              git clone --depth 1 https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout "${FLUTTER_REF}"
+              cd ..
+            }
+          else
+            # 如果仓库是公开的，可以使用普通 HTTPS
+            if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
+              echo "Branch/clone failed, trying with full clone"
+              git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+              cd flutter_app
+              git checkout "${FLUTTER_REF}"
+              cd ..
+            fi
           fi
       
       - name: Install Linux build dependencies
