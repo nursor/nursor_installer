@@ -1,0 +1,520 @@
+name: Build All Platforms
+
+on:
+  # 监听当前仓库的tag事件
+  push:
+    tags:
+      - 'v*'
+  # 监听其他仓库通过repository_dispatch触发的事件
+  repository_dispatch:
+    types: [build-trigger]
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+      flutter_tag:
+        description: 'Flutter app tag/commit'
+        required: false
+      core_tag:
+        description: 'Core tag/commit'
+        required: false
+
+env:
+  CORE_REPO: nursor/nursor-core2
+  FLUTTER_REPO: nursor/nursor-flutter-app
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      flutter_ref: ${{ steps.get_refs.outputs.flutter }}
+      core_ref: ${{ steps.get_refs.outputs.core }}
+    steps:
+      - name: Get version from tag or input
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "version=${{ github.event.client_payload.version || github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=unknown" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Determine refs
+        id: get_refs
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FLUTTER_REF="${{ github.event.inputs.flutter_tag }}"
+            CORE_REF="${{ github.event.inputs.core_tag }}"
+            if [ -z "$FLUTTER_REF" ]; then
+              FLUTTER_REF="${VERSION}"
+            fi
+            if [ -z "$CORE_REF" ]; then
+              CORE_REF="${VERSION}"
+            fi
+            echo "flutter=${FLUTTER_REF}" >> $GITHUB_OUTPUT
+            echo "core=${CORE_REF}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            FLUTTER_REF="${{ github.event.client_payload.flutter_ref }}"
+            CORE_REF="${{ github.event.client_payload.core_ref }}"
+            if [ -z "$FLUTTER_REF" ]; then
+              FLUTTER_REF="${VERSION}"
+            fi
+            if [ -z "$CORE_REF" ]; then
+              CORE_REF="${VERSION}"
+            fi
+            echo "flutter=${FLUTTER_REF}" >> $GITHUB_OUTPUT
+            echo "core=${CORE_REF}" >> $GITHUB_OUTPUT
+          else
+            echo "flutter=${VERSION}" >> $GITHUB_OUTPUT
+            echo "core=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+  build-macos:
+    needs: detect-version
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+      fail-fast: false  # 允许一个失败时不停止其他构建
+    runs-on: macos-14  # 使用最新可用的macOS runner
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'  # 最新stable版本
+          channel: 'stable'
+          architecture: ${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        run: |
+          FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
+          rm -rf flutter_app
+          if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
+            echo "Branch/clone failed, trying with full clone"
+            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+            cd flutter_app
+            git checkout "${FLUTTER_REF}"
+            cd ..
+          fi
+      
+      - name: Build Flutter App for macOS
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          # 根据架构选择构建目标
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            flutter build macos --release --target-platform=darwin-x64
+          else
+            flutter build macos --release --target-platform=darwin-arm64
+          fi
+          # 复制Nursor.app到构建目录
+          cp -R build/macos/Build/Products/Release/Nursor.app ../macos/
+      
+      - name: Download nursor-core
+        run: |
+          CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
+          ARCH="${{ matrix.arch }}"
+          mkdir -p macos
+          
+          # 下载二进制文件
+          CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}"
+          curl -L -o macos/nursor-core "${CORE_URL}"
+          chmod +x macos/nursor-core
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}.sha256"
+          if curl -fsSL "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+            echo "Verifying SHA256 checksum..."
+            (cd macos && sha256sum -c --quiet <(cat /tmp/checksum.sha256 | tr -d '\r\n' | awk '{print $1"  nursor-core"}')) || {
+              echo "ERROR: SHA256 checksum verification failed"
+              exit 1
+            }
+            echo "SHA256 checksum verified successfully"
+          else
+            echo "WARNING: SHA256 checksum file not found, skipping verification"
+          fi
+      
+      - name: Prepare macOS build environment
+        working-directory: ./macos
+        run: |
+          # 确保所有必要的文件存在
+          echo "检查必需文件..."
+          REQUIRED_FILES=(
+            "nursor-core"
+            "Nursor.app"
+            "org.nursor.nursor-core.plist"
+            "org.nursor.trustca.plist"
+            "trust_ca_once.sh"
+            "scripts/preinstall"
+            "scripts/postinstall"
+            "scripts/send_to_sentry.sh"
+          )
+          
+          MISSING_FILES=()
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ] && [ ! -d "$file" ]; then
+              MISSING_FILES+=("$file")
+            fi
+          done
+          
+          if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+            echo "ERROR: 以下必需文件未找到:"
+            printf '  - %s\n' "${MISSING_FILES[@]}"
+            exit 1
+          fi
+          
+          # 检查ca.pem文件（如果不存在，警告但继续）
+          if [ ! -f "ca.pem" ]; then
+            echo "WARNING: ca.pem not found. If required, please ensure it exists in the macos directory."
+          fi
+          
+          echo "所有必需文件检查通过！"
+      
+      - name: Build macOS installer
+        id: build_installer
+        working-directory: ./macos
+        run: |
+          sudo ./build_installer.sh
+          ls -lah output/
+          echo "installer_built=true" >> $GITHUB_OUTPUT
+      
+      - name: Record build status
+        if: always()
+        run: |
+          echo "Build status for ${{ matrix.arch }}: ${{ job.status }}" >> build_status.txt
+      
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-macos-${{ matrix.arch }}
+          path: macos/output/*.pkg
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: macos/output/*.pkg
+          tag_name: ${{ needs.detect-version.outputs.version }}
+          name: Release ${{ needs.detect-version.outputs.version }}
+          body: |
+            ## macOS Installer - ${{ matrix.arch }}
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ needs.detect-version.outputs.flutter_ref }}
+            Core ref: ${{ needs.detect-version.outputs.core_ref }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    needs: detect-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+          channel: 'stable'
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        run: |
+          $FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
+          Remove-Item -Recurse -Force flutter_app -ErrorAction SilentlyContinue
+          git clone --depth 1 --branch $FLUTTER_REF https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+          if ($LASTEXITCODE -ne 0) {
+            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+            cd flutter_app
+            git checkout $FLUTTER_REF
+            cd ..
+          }
+      
+      - name: Build Flutter App for Windows
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          flutter build windows --release
+      
+      - name: Download nursor-core for Windows
+        run: |
+          $CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
+          New-Item -ItemType Directory -Force -Path windows | Out-Null
+          
+          # 下载二进制文件
+          $CORE_URL = "https://github.com/${{ env.CORE_REPO }}/releases/download/$CORE_REF/core-windows-amd64"
+          Invoke-WebRequest -Uri $CORE_URL -OutFile "windows/nursor-core-amd64.dll"
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          $CHECKSUM_URL = "https://github.com/${{ env.CORE_REPO }}/releases/download/$CORE_REF/core-windows-amd64.sha256"
+          try {
+            $checksumContent = Invoke-WebRequest -Uri $CHECKSUM_URL -UseBasicParsing | Select-Object -ExpandProperty Content
+            $expectedHash = ($checksumContent -split '\s+')[0].Trim()
+            $actualHash = (Get-FileHash -Path "windows/nursor-core-amd64.dll" -Algorithm SHA256).Hash.ToLower()
+            if ($expectedHash.ToLower() -eq $actualHash) {
+              Write-Host "SHA256 checksum verified successfully"
+            } else {
+              Write-Error "ERROR: SHA256 checksum verification failed. Expected: $expectedHash, Got: $actualHash"
+              exit 1
+            }
+          } catch {
+            Write-Host "WARNING: SHA256 checksum file not found, skipping verification"
+          }
+      
+      - name: Setup Inno Setup
+        uses: ilexn/innosetup-action@v1.0.1
+      
+      - name: Prepare Windows build environment
+        run: |
+          # 创建构建目录
+          New-Item -ItemType Directory -Force -Path "windows_build" | Out-Null
+          
+          # 检查Flutter构建产物
+          if (-not (Test-Path "flutter_app\build\windows\x64\runner\Release")) {
+            Write-Error "ERROR: Flutter build output not found at flutter_app\build\windows\x64\runner\Release"
+            exit 1
+          }
+          
+          # 复制Flutter构建产物到windows目录
+          Copy-Item -Recurse -Force "flutter_app\build\windows\x64\runner\Release\*" "windows_build\" -ErrorAction Stop
+          
+          # 检查nursor-core文件
+          if (-not (Test-Path "windows\nursor-core-amd64.dll")) {
+            Write-Error "ERROR: nursor-core-amd64.dll not found"
+            exit 1
+          }
+          
+          # 复制nursor-core到构建目录
+          Copy-Item "windows\nursor-core-amd64.dll" "windows_build\" -ErrorAction Stop
+          
+          Write-Host "Windows build environment prepared successfully"
+      
+      - name: Build Windows installer
+        run: |
+          # 更新Inno Setup脚本中的路径
+          $issFile = Get-Content "nursor_win_installer.iss" -Raw
+          $issFile = $issFile -replace "#define MySourcePath.*", "#define MySourcePath `"$PWD\windows_build`""
+          $issFile = $issFile -replace "#define MyAppVersion.*", "#define MyAppVersion `"${{ needs.detect-version.outputs.version }}`""
+          $issFile | Set-Content "nursor_win_installer.iss"
+          
+          iscc nursor_win_installer.iss
+      
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-windows
+          path: output/*.exe
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: output/*.exe
+          tag_name: ${{ needs.detect-version.outputs.version }}
+          name: Release ${{ needs.detect-version.outputs.version }}
+          body: |
+            ## Windows Installer
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ needs.detect-version.outputs.flutter_ref }}
+            Core ref: ${{ needs.detect-version.outputs.core_ref }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    needs: detect-version
+    strategy:
+      matrix:
+        arch: [amd64]
+        # 注意：arm64需要self-hosted runner，暂不支持
+        # 如需arm64支持，请配置self-hosted runner或使用cross-compilation
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+          channel: 'stable'
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        run: |
+          FLUTTER_REF="${{ needs.detect-version.outputs.flutter_ref }}"
+          rm -rf flutter_app
+          if ! git clone --depth 1 --branch "${FLUTTER_REF}" https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app 2>/dev/null; then
+            echo "Branch/clone failed, trying with full clone"
+            git clone --depth 1 https://github.com/${{ env.FLUTTER_REPO }}.git flutter_app
+            cd flutter_app
+            git checkout "${FLUTTER_REF}"
+            cd ..
+          fi
+      
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libblkid1 \
+            liblzma5 \
+            libsecret-1-dev \
+            desktop-file-utils \
+            libappindicator3-dev \
+            patchelf
+      
+      - name: Build Flutter App for Linux
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          # 根据架构选择构建目标（amd64使用x64，arm64使用aarch64）
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            flutter build linux --release --target-platform=linux-x64
+          else
+            flutter build linux --release --target-platform=linux-arm64
+          fi
+      
+      - name: Download nursor-core for Linux
+        run: |
+          CORE_REF="${{ needs.detect-version.outputs.core_ref }}"
+          ARCH="${{ matrix.arch }}"
+          mkdir -p linux
+          
+          # 下载二进制文件
+          CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}"
+          curl -L -o linux/nursor-core "${CORE_URL}"
+          chmod +x linux/nursor-core
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}.sha256"
+          if curl -fsSL "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+            echo "Verifying SHA256 checksum..."
+            (cd linux && sha256sum -c --quiet <(cat /tmp/checksum.sha256 | tr -d '\r\n' | awk '{print $1"  nursor-core"}')) || {
+              echo "ERROR: SHA256 checksum verification failed"
+              exit 1
+            }
+            echo "SHA256 checksum verified successfully"
+          else
+            echo "WARNING: SHA256 checksum file not found, skipping verification"
+          fi
+      
+      - name: Package Linux installer
+        id: package_installer
+        run: |
+          ARCH="${{ matrix.arch }}"
+          PACKAGE_VERSION="${{ needs.detect-version.outputs.version }}"
+          
+          # 创建AppImage或deb包的结构
+          mkdir -p linux_appimage/usr/bin
+          mkdir -p linux_appimage/usr/share/applications
+          mkdir -p linux_appimage/usr/share/icons
+          
+          # 根据架构选择正确的构建输出路径
+          if [ "$ARCH" = "amd64" ]; then
+            BUILD_PATH="x64"
+          else
+            BUILD_PATH="arm64"
+          fi
+          
+          # 复制Flutter构建产物
+          if [ -d "flutter_app/build/linux/${BUILD_PATH}/release/bundle" ]; then
+            cp -R flutter_app/build/linux/${BUILD_PATH}/release/bundle/* linux_appimage/
+          else
+            echo "ERROR: Flutter build output not found at flutter_app/build/linux/${BUILD_PATH}/release/bundle"
+            exit 1
+          fi
+          cp linux/nursor-core linux_appimage/nursor-core
+          
+          # 创建.desktop文件
+          cat > linux_appimage/usr/share/applications/nursor.desktop <<EOF
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Nursor
+          Exec=nursor
+          Icon=nursor
+          Categories=Utility;
+          EOF
+          
+          # 创建tar.gz包（简化版）
+          tar -czf output/nursor-linux-${ARCH}-${PACKAGE_VERSION}.tar.gz -C linux_appimage .
+          echo "package_created=true" >> $GITHUB_OUTPUT
+      
+      - name: Record build status
+        if: always()
+        run: |
+          echo "Build status for ${{ matrix.arch }}: ${{ job.status }}" >> build_status.txt
+      
+      - name: Upload Linux installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-linux-${{ matrix.arch }}
+          path: output/*.tar.gz
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: output/*.tar.gz
+          tag_name: ${{ needs.detect-version.outputs.version }}
+          name: Release ${{ needs.detect-version.outputs.version }}
+          body: |
+            ## Linux Installer - ${{ matrix.arch }}
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ needs.detect-version.outputs.flutter_ref }}
+            Core ref: ${{ needs.detect-version.outputs.core_ref }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-completion:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Build Summary
+        run: |
+          echo "## 📦 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### macOS" >> $GITHUB_STEP_SUMMARY
+          echo "- amd64: ${{ needs.build-macos.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- arm64: ${{ needs.build-macos.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Windows" >> $GITHUB_STEP_SUMMARY
+          echo "- amd64: ${{ needs.build-windows.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Linux" >> $GITHUB_STEP_SUMMARY
+          echo "- amd64: ${{ needs.build-linux.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- arm64: ⚠️ Not supported (requires self-hosted runner)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Status:** ${{ needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && '✅ All builds succeeded' || '❌ Some builds failed' }}" >> $GITHUB_STEP_SUMMARY
+

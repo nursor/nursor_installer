@@ -116,6 +116,15 @@ cp "${LAUNCHD_PLIST_NAME}" "${CORE_PAYLOAD_ROOT}/Library/LaunchDaemons/${LAUNCHD
 cp "${CA_PEM_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/${CA_PEM_NAME}" || { echo "ERROR: Failed to copy ${CA_PEM_NAME}."; exit 1; }
 cp "${CA_ONCE_SH_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/${CA_ONCE_SH_NAME}" || { echo "ERROR: Failed to copy ${CA_ONCE_SH_NAME}."; exit 1; }
 
+# 复制 Sentry 集成库到安装目录，以便 trust_ca_once.sh 可以加载它
+SENTRY_LIB_NAME="scripts/send_to_sentry.sh"
+if [ -f "${SENTRY_LIB_NAME}" ]; then
+    cp "${SENTRY_LIB_NAME}" "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/send_to_sentry.sh" || { echo "WARNING: Failed to copy ${SENTRY_LIB_NAME}. Sentry integration may not work in trust_ca_once.sh."; }
+    chmod +x "${CORE_PAYLOAD_ROOT}/Library/Application Support/Nursor/send_to_sentry.sh" || { echo "WARNING: Failed to set execute permissions for send_to_sentry.sh."; }
+else
+    echo "WARNING: ${SENTRY_LIB_NAME} not found. Sentry integration may not work in trust_ca_once.sh."
+fi
+
 # 确保脚本目录存在且脚本可执行
 if [ ! -d "scripts" ]; then
     echo "ERROR: 'scripts' directory not found. Please ensure it exists and contains preinstall/postinstall scripts."
