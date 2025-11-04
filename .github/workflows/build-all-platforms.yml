@@ -738,8 +738,8 @@ jobs:
       
       - name: Install system dependencies
         run: |
-          apt-get update
-          apt-get install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             git \
             curl \
             wget \
@@ -764,8 +764,8 @@ jobs:
       
       - name: Install Linux build dependencies
         run: |
-          apt-get update
-          apt-get install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             libgtk-3-dev \
             libglib2.0-dev \
             libblkid1 \
