@@ -727,7 +727,11 @@ jobs:
         # 注意：arm64需要self-hosted runner，暂不支持
         # 如需arm64支持，请配置self-hosted runner或使用cross-compilation
       fail-fast: false
-    runs-on: ubuntu-latest
+    # 使用 Ubuntu 20.04 构建以确保兼容性：
+    # - 在 Ubuntu 20.04 上构建（GLib 2.72.x）可以确保应用在 Ubuntu 20.04 及更高版本上运行
+    # - 如果在 ubuntu-latest（通常是 22.04+，GLib 2.78+）上构建，会导致在 Ubuntu 20.04 上运行时
+    #   出现 "undefined symbol: g_once_init_enter_pointer" 错误
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout packaging repo
         uses: actions/checkout@v4
@@ -753,12 +757,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
+            libglib2.0-dev \
             libblkid1 \
             liblzma5 \
             libsecret-1-dev \
             desktop-file-utils \
             libappindicator3-dev \
             patchelf
+      
+      - name: Check GLib version (for compatibility)
+        run: |
+          echo "Checking GLib version for compatibility..."
+          GLIB_VERSION=$(pkg-config --modversion glib-2.0)
+          echo "GLib version: $GLIB_VERSION"
+          echo "This version ensures compatibility with Ubuntu 20.04 and later versions"
       
       - name: Build Flutter App for Linux
         working-directory: ./flutter_app
