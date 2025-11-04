@@ -56,7 +56,6 @@ Source: "{#MySourcePath}\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreve
 Source: "{#MySourcePath}\nursor-core-amd64.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourcePath}\nursorcore_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourcePath}\screen_retriever_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MySourcePath}\sentry.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourcePath}\tray_manager_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourcePath}\window_manager_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourcePath}\wintun.dll"; DestDir: "{app}"; Flags: ignoreversion
