@@ -727,16 +727,11 @@ jobs:
         # 注意：arm64需要self-hosted runner，暂不支持
         # 如需arm64支持，请配置self-hosted runner或使用cross-compilation
       fail-fast: false
-    # 使用 Docker 容器在 Ubuntu 20.04 环境中构建以确保兼容性：
-    # - GitHub Actions 托管运行器不支持 ubuntu-20.04 标签
-    # - 使用 Docker 容器可以在 Ubuntu 20.04 环境中构建（GLib 2.72.x）
-    # - 这样可以确保应用在 Ubuntu 20.04 及更高版本上运行
+    # 使用 Ubuntu 20.04 构建以确保兼容性：
+    # - 在 Ubuntu 20.04 上构建（GLib 2.72.x）可以确保应用在 Ubuntu 20.04 及更高版本上运行
     # - 如果在 ubuntu-latest（通常是 22.04+，GLib 2.78+）上构建，会导致在 Ubuntu 20.04 上运行时
     #   出现 "undefined symbol: g_once_init_enter_pointer" 错误
-    runs-on: ubuntu-latest
-    container:
-      image: ubuntu:20.04
-      options: --privileged
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout packaging repo
         uses: actions/checkout@v4
