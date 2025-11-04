@@ -80,6 +80,38 @@ jobs:
             if [ -z "$CORE_REF" ]; then
               CORE_REF="${VERSION}"
             fi
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # 当本仓库打 tag 触发时，从外部两个仓库获取最新的 tag
+            API_TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
+            if [ -z "$API_TOKEN" ]; then
+              API_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            fi
+
+            get_latest_tag() {
+              local repo="$1"
+              # 优先尝试 releases/latest（若没有发布会返回非 200），失败则回退到 /tags
+              local latest_release
+              latest_release=$(curl -s -H "Authorization: token ${API_TOKEN}" "https://api.github.com/repos/${repo}/releases/latest" | grep -m1 '"tag_name"' | sed 's/.*"tag_name" *: *"\([^"]*\)".*/\1/')
+              if [ -n "$latest_release" ]; then
+                echo "$latest_release"
+                return 0
+              fi
+              # 回退：读取 tags 列表的第一个 name
+              curl -s -H "Authorization: token ${API_TOKEN}" "https://api.github.com/repos/${repo}/tags?per_page=1" \
+                | grep -m1 '"name"' \
+                | sed 's/.*"name" *: *"\([^"]*\)".*/\1/'
+            }
+
+            FLUTTER_REF=$(get_latest_tag "${{ env.FLUTTER_REPO }}")
+            CORE_REF=$(get_latest_tag "${{ env.CORE_REPO }}")
+
+            # 兜底处理：如果获取失败，使用当前版本号
+            if [ -z "$FLUTTER_REF" ]; then
+              FLUTTER_REF="${VERSION}"
+            fi
+            if [ -z "$CORE_REF" ]; then
+              CORE_REF="${VERSION}"
+            fi
           else
             FLUTTER_REF="${VERSION}"
             CORE_REF="${VERSION}"
@@ -99,7 +131,7 @@ jobs:
   build-macos:
     needs: detect-version
     uses: ./.github/workflows/build-macos.yml
-        with:
+    with:
       version: ${{ needs.detect-version.outputs.version }}
       flutter_ref: ${{ needs.detect-version.outputs.flutter_ref }}
       core_ref: ${{ needs.detect-version.outputs.core_ref }}
@@ -108,7 +140,7 @@ jobs:
   build-windows:
     needs: detect-version
     uses: ./.github/workflows/build-windows.yml
-        with:
+    with:
       version: ${{ needs.detect-version.outputs.version }}
       flutter_ref: ${{ needs.detect-version.outputs.flutter_ref }}
       core_ref: ${{ needs.detect-version.outputs.core_ref }}
@@ -117,7 +149,7 @@ jobs:
   build-linux:
     needs: detect-version
     uses: ./.github/workflows/build-linux.yml
-        with:
+    with:
       version: ${{ needs.detect-version.outputs.version }}
       flutter_ref: ${{ needs.detect-version.outputs.flutter_ref }}
       core_ref: ${{ needs.detect-version.outputs.core_ref }}
