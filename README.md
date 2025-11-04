@@ -2,20 +2,23 @@
 
 ## 概述
 
-这是一个用于创建 Nursor 应用程序 Windows 安装程序的 Inno Setup 脚本。安装程序会自动处理以下任务：
-
-1. 打包所有应用程序文件
-2. 将 wintun.dll 移动到 C:\Windows\System32
-3. 安装并信任 ca.pem 证书
-4. 创建开始菜单和可选的桌面快捷方式
+此仓库主要负责的是给nursor-core和nursor-app项目打包用的，将这些项目打包之后形成一个安装包，用户执行安装之后，会安装好对应的依赖，以及证书。主要功能有：
+1. windows
+    1. 打包所有应用程序文件
+    2. 将 wintun.dll 移动到 C:\Windows\System32，有时是C:\\windows\syswow64，两者都是一样作用的
+    3. 安装并信任 ca.pem 证书
+    4. 创建开始菜单和可选的桌面快捷方式
+    
+1. macos
+    1. 安装证书
+    2. 将可执行文件移动到/Libirary/Application Support/Nursor下，同时也会移动trust_ca.sh和异常上报脚本；
+    3. 移动完成后会尝试启动这个可执行文件；
+    
+1. linux
+    1. 常规操作，由于tun是系统自带的，最为轻松
+    
 
 ## 重要说明
-
-### 管理员权限要求
-
-**此安装程序需要管理员权限才能正常运行**，因为需要：
-- 将 wintun.dll 复制到 C:\Windows\System32 目录
-- 安装系统级证书
 
 ### 运行方式
 
@@ -33,7 +36,7 @@
 NursorInstaller.exe
 ```
 
-## 故障排除
+## 问题记录
 
 ### 权限错误
 如果遇到"拒绝访问"或"权限不足"错误：
@@ -56,7 +59,7 @@ NursorInstaller.exe
 
 ## 测试安装
 
-测试安装的时候，需要删除flutter的build，installer项目中的各种app，之后才能安装并且出现在launchpad中
+测试安装的时候，需要删除flutter的build，installer项目中的各种app，之后才能安装并且出现在launchpad中，似乎有一个全局唯一的限制。
 
 ## 文件说明
 
@@ -95,5 +98,4 @@ Windows下需要下载innostep打包工具来打包「方案选单」
 **日志文件位置：**
 - 证书安装日志：`/tmp/nursor_trustca.log`
 - 服务日志：`/var/log/nursor-core.log`
-
 

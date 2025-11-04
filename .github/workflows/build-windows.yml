@@ -1,0 +1,430 @@
+name: Build Windows Installer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      flutter_ref:
+        required: true
+        type: string
+      core_ref:
+        required: true
+        type: string
+
+env:
+  CORE_REPO: nursor/nursor-core2
+  FLUTTER_REPO: nursor/nursor-flutter-app
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ inputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.PACKAGING_REPO_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Build Flutter App for Windows
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          flutter build windows --release
+      
+      - name: Download nursor-core for Windows
+        run: |
+          $CORE_REF="${{ inputs.core_ref }}"
+          $CORE_REPO="${{ env.CORE_REPO }}"
+          $TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
+          
+          New-Item -ItemType Directory -Force -Path windows | Out-Null
+          
+            # 构建下载 URL（Windows 版本的文件名是 nursor.dll）
+            # 直接下载到目标文件名，避免重命名步骤
+            $OUTPUT_FILE = "windows/nursor-core-amd64.dll"
+            
+            Write-Host "Downloading nursor-core..."
+            Write-Host "Target file: $OUTPUT_FILE"
+          
+          # 验证 token 是否设置（不显示完整 token）
+          if ([string]::IsNullOrEmpty($TOKEN)) {
+            Write-Error "ERROR: PACKAGING_REPO_TOKEN is not set or empty"
+            exit 1
+          }
+          Write-Host "Token is set (length: $($TOKEN.Length) characters)"
+          
+          # 对于私有仓库的 release assets，需要使用 GitHub API 下载
+          # 步骤1：使用 API 获取 asset ID
+          $apiUrl = "https://api.github.com/repos/$CORE_REPO/releases/tags/$CORE_REF"
+          $apiHeaders = @{
+            "Authorization" = "Bearer $TOKEN"
+            "Accept" = "application/vnd.github.v3+json"
+            "User-Agent" = "GitHub-Actions"
+          }
+          
+          # 使用 API 获取 release 信息
+          Write-Host "Step 1: Fetching release asset information via GitHub API..."
+          Write-Host "Calling GitHub API: $apiUrl"
+          
+          try {
+            $releaseResponse = Invoke-RestMethod -Uri $apiUrl -Headers $apiHeaders -Method Get
+            Write-Host "✓ Release found: $($releaseResponse.name)"
+            Write-Host "Release ID: $($releaseResponse.id)"
+            Write-Host "Assets count: $($releaseResponse.assets.Count)"
+          } catch {
+            Write-Host "=========================================="
+            Write-Host "API ERROR DETAILS"
+            Write-Host "=========================================="
+            Write-Error "ERROR: Failed to fetch release information from GitHub API"
+            Write-Host "API URL: $apiUrl"
+            Write-Host "Error Type: $($_.Exception.GetType().FullName)"
+            Write-Host "Error Message: $($_.Exception.Message)"
+            
+            # 检查 HTTP 状态码
+            if ($_.Exception -is [System.Net.WebException]) {
+              $webException = $_.Exception
+              if ($webException.Response) {
+                $statusCode = [int]$webException.Response.StatusCode
+                Write-Host "HTTP Status Code: $statusCode"
+                
+                if ($statusCode -eq 404) {
+                  Write-Host "Release tag not found: $CORE_REF"
+                  Write-Host "Please check if the release tag exists in repository: $CORE_REPO"
+                } elseif ($statusCode -eq 401 -or $statusCode -eq 403) {
+                  Write-Host "Authentication failed. Token may not have access to repository: $CORE_REPO"
+                  Write-Host "Please verify PACKAGING_REPO_TOKEN has 'repo' scope and access to this repository"
+                }
+              }
+            }
+            Write-Host "=========================================="
+            exit 1
+          }
+          
+          # 查找名为 nursor.dll 的 asset
+          $asset = $releaseResponse.assets | Where-Object { $_.name -eq "nursor.dll" }
+          
+          if (-not $asset) {
+            Write-Error "ERROR: Asset 'nursor.dll' not found in release $CORE_REF"
+            Write-Host "Available assets in this release:"
+            if ($releaseResponse.assets.Count -eq 0) {
+              Write-Host "  (no assets found)"
+            } else {
+              $releaseResponse.assets | ForEach-Object { Write-Host "  - $($_.name) (ID: $($_.id))" }
+            }
+            exit 1
+          }
+          
+          Write-Host "✓ Found asset: $($asset.name) (ID: $($asset.id), Size: $($asset.size) bytes)"
+          
+          # 对于私有仓库，必须使用 API 下载端点，不能直接使用 browser_download_url
+          $assetUrl = "https://api.github.com/repos/$CORE_REPO/releases/assets/$($asset.id)"
+          Write-Host "Using API download endpoint: $assetUrl"
+          
+          # 步骤2：使用 API 下载 asset（需要认证）
+          Write-Host "Step 2: Downloading asset from: $assetUrl"
+          $downloadHeaders = @{
+            "Authorization" = "Bearer $TOKEN"
+            "Accept" = "application/octet-stream"
+            "User-Agent" = "GitHub-Actions"
+          }
+          
+          Write-Host "Using authentication headers: Authorization=Bearer ***, Accept=application/octet-stream"
+          
+          # 下载二进制文件
+          try {
+            # 直接下载到目标文件名
+            $response = Invoke-WebRequest -Uri $assetUrl -Headers $downloadHeaders -OutFile $OUTPUT_FILE -UseBasicParsing
+            
+            Write-Host "HTTP Status Code: $($response.StatusCode)"
+            Write-Host "Download completed successfully"
+          } catch {
+            Write-Host "=========================================="
+            Write-Host "DOWNLOAD ERROR DETAILS"
+            Write-Host "=========================================="
+            Write-Error "ERROR: Failed to download nursor-core asset"
+            Write-Host "Asset URL: $assetUrl"
+            Write-Host "Error Type: $($_.Exception.GetType().FullName)"
+            Write-Host "Error Message: $($_.Exception.Message)"
+            
+            # 检查 HTTP 状态码
+            if ($_.Exception -is [System.Net.WebException]) {
+              $webException = $_.Exception
+              if ($webException.Response) {
+                $statusCode = [int]$webException.Response.StatusCode
+                Write-Host "HTTP Status Code: $statusCode"
+                
+                if ($statusCode -eq 404) {
+                  Write-Host "Asset not found. Please check if the asset exists in the release."
+                } elseif ($statusCode -eq 401 -or $statusCode -eq 403) {
+                  Write-Host "Authentication failed. Token may not have access to download the asset."
+                  Write-Host "Please verify PACKAGING_REPO_TOKEN has 'repo' scope and access to this repository"
+                }
+              }
+            }
+            Write-Host "=========================================="
+            exit 1
+          }
+          
+          # 简单的文件验证：只检查文件是否存在且不为空
+          if (-not (Test-Path $OUTPUT_FILE)) {
+            Write-Error "ERROR: File not found after download: $OUTPUT_FILE"
+            exit 1
+          }
+          
+          $fileSize = (Get-Item $OUTPUT_FILE).Length
+          Write-Host "Downloaded file size: $fileSize bytes"
+          
+          if ($fileSize -eq 0) {
+            Write-Error "ERROR: Downloaded file is empty"
+            exit 1
+          }
+          
+          Write-Host "✓ File downloaded successfully"
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          # 对于私有仓库，也需要使用 API 下载 checksum
+          try {
+            Write-Host "Checking for SHA256 checksum..."
+            # 查找 checksum asset
+            $checksumAsset = $releaseResponse.assets | Where-Object { $_.name -eq "nursor.dll.sha256" }
+            
+            if ($checksumAsset) {
+              Write-Host "✓ Found checksum asset: $($checksumAsset.name)"
+              $checksumAssetUrl = "https://api.github.com/repos/$CORE_REPO/releases/assets/$($checksumAsset.id)"
+              
+              $checksumHeaders = @{
+                "Authorization" = "Bearer $TOKEN"
+                "Accept" = "application/octet-stream"
+              }
+              $checksumResponse = Invoke-WebRequest -Uri $checksumAssetUrl -Headers $checksumHeaders -UseBasicParsing -ErrorAction Stop
+              $checksumContent = $checksumResponse.Content.Trim()
+              $expectedHash = ($checksumContent -split '\s+')[0].Trim()
+              
+              Write-Host "Expected SHA256: $expectedHash"
+              
+              $actualHash = (Get-FileHash -Path $OUTPUT_FILE -Algorithm SHA256).Hash.ToLower()
+              Write-Host "Actual SHA256: $actualHash"
+              
+              if ($expectedHash.ToLower() -eq $actualHash) {
+                Write-Host "✓ SHA256 checksum verified successfully"
+              } else {
+                Write-Error "ERROR: SHA256 checksum verification failed"
+                Write-Error "Expected: $expectedHash"
+                Write-Error "Got: $actualHash"
+                exit 1
+              }
+            } else {
+              Write-Host "⚠ WARNING: SHA256 checksum file not found in release, skipping verification"
+            }
+          } catch {
+            Write-Host "⚠ WARNING: SHA256 checksum verification failed or not available, skipping"
+            Write-Host "  Error: $($_.Exception.Message)"
+          }
+      
+      - name: Setup Inno Setup
+        run: |
+          # 下载并安装 Inno Setup
+          $innosetupVersion = "6.2.2"
+          $innosetupUrl = "https://files.jrsoftware.org/is/6/innosetup-$innosetupVersion.exe"
+          $installerPath = "$env:TEMP\innosetup-installer.exe"
+          
+          Write-Host "Downloading Inno Setup $innosetupVersion..."
+          Invoke-WebRequest -Uri $innosetupUrl -OutFile $installerPath
+          
+          Write-Host "Installing Inno Setup..."
+          Start-Process -FilePath $installerPath -ArgumentList "/SILENT", "/DIR=C:\Program Files (x86)\Inno Setup 6" -Wait
+          
+          Write-Host "Adding Inno Setup to PATH..."
+          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
+          Add-Content -Path $env:GITHUB_ENV -Value "PATH=$env:PATH;C:\Program Files (x86)\Inno Setup 6"
+          
+          # 验证安装
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            Write-Host "✓ Inno Setup installed successfully"
+            Write-Host "ISCC.exe path: $isccPath"
+          } else {
+            Write-Error "Inno Setup installation failed - ISCC.exe not found"
+            exit 1
+          }
+      
+      - name: Prepare Windows build environment
+        run: |
+          # 创建构建目录
+          $buildDir = "windows_build"
+          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+          
+          # 检查Flutter构建产物
+          $flutterBuildPath = "flutter_app\build\windows\x64\runner\Release"
+          if (-not (Test-Path $flutterBuildPath)) {
+            Write-Error "ERROR: Flutter build output not found at $flutterBuildPath"
+            exit 1
+          }
+          
+          Write-Host "Copying Flutter build artifacts..."
+          # 复制Flutter构建产物到构建目录
+          Copy-Item -Recurse -Force "$flutterBuildPath\*" "$buildDir\" -ErrorAction Stop
+          
+          Write-Host "Copying additional files from windows directory..."
+          # 检查并复制nursor-core文件
+          if (-not (Test-Path "windows\nursor-core-amd64.dll")) {
+            Write-Error "ERROR: nursor-core-amd64.dll not found in windows directory"
+            exit 1
+          }
+          Copy-Item "windows\nursor-core-amd64.dll" "$buildDir\" -ErrorAction Stop
+          
+          # 复制wintun.dll（如果存在，覆盖Flutter构建中的版本）
+          if (Test-Path "windows\wintun.dll") {
+            Copy-Item "windows\wintun.dll" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied wintun.dll from windows directory"
+          } else {
+            Write-Host "WARNING: wintun.dll not found in windows directory, using Flutter build version"
+          }
+          
+          # 复制ca.pem文件（证书文件）
+          if (Test-Path "windows\ca.pem") {
+            Copy-Item "windows\ca.pem" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied ca.pem from windows directory"
+          } else {
+            Write-Error "ERROR: ca.pem not found in windows directory"
+            exit 1
+          }
+          
+          # 复制logo.ico文件（图标文件）
+          if (Test-Path "windows\logo.ico") {
+            Copy-Item "windows\logo.ico" "$buildDir\" -Force -ErrorAction Stop
+            Write-Host "Copied logo.ico from windows directory"
+          } else {
+            Write-Error "ERROR: logo.ico not found in windows directory"
+            exit 1
+          }
+          
+          Write-Host "Windows build environment prepared successfully"
+          Write-Host "Build directory contents:"
+          Get-ChildItem $buildDir | Select-Object Name, Length | Format-Table
+      
+      - name: Build Windows installer
+        working-directory: ./windows_build
+        run: |
+          # 验证必需文件存在并检测可执行文件名
+          Write-Host "Verifying required files in build directory..."
+          
+          # 检查主可执行文件（可能是 nursor_app.exe 或其他名称）
+          $exeFiles = Get-ChildItem -Filter "*.exe" | Where-Object { $_.Name -notlike "*runner*" -and $_.Name -notlike "*flutter*" }
+          if ($exeFiles.Count -eq 0) {
+            Write-Error "ERROR: No main executable file found (.exe)"
+            Write-Host "Available .exe files:"
+            Get-ChildItem -Filter "*.exe" | Select-Object Name | Format-Table
+            exit 1
+          }
+          
+          # 使用找到的第一个 .exe 文件名（通常是主应用）
+          $mainExe = $exeFiles[0].Name
+          Write-Host "✓ Found main executable: $mainExe"
+          
+          # 验证其他必需文件
+          $requiredFiles = @("logo.ico", "ca.pem", "wintun.dll")
+          foreach ($file in $requiredFiles) {
+            if (-not (Test-Path $file)) {
+              Write-Error "ERROR: Required file not found: $file"
+              Write-Host "Available files:"
+              Get-ChildItem | Select-Object Name | Format-Table
+              exit 1
+            }
+            Write-Host "✓ Found: $file"
+          }
+          
+          # 检查 Flutter DLL 文件（可选，如果不存在会警告）
+          $flutterDlls = @("flutter_windows.dll", "nursorcore_plugin.dll", "screen_retriever_plugin.dll", "tray_manager_plugin.dll", "window_manager_plugin.dll")
+          foreach ($dll in $flutterDlls) {
+            if (Test-Path $dll) {
+              Write-Host "✓ Found: $dll"
+            } else {
+              Write-Host "⚠ WARNING: Flutter DLL not found: $dll (may be optional)"
+            }
+          }
+          
+          # 准备Inno Setup脚本（复制到构建目录并更新路径）
+          $issFile = Get-Content "..\nursor_win_installer.iss" -Raw
+          
+          # 更新版本号（移除 'v' 前缀如果有）
+          $version = "${{ inputs.version }}"
+          if ($version.StartsWith("v")) {
+            $version = $version.Substring(1)
+          }
+          
+          # 更新Inno Setup脚本中的路径、版本和可执行文件名
+          $issFile = $issFile -replace "#define MySourcePath.*", "#define MySourcePath `".`""
+          $issFile = $issFile -replace "#define MyAppVersion.*", "#define MyAppVersion `"$version`""
+          $issFile = $issFile -replace "#define MyIconPath.*", "#define MyIconPath `"logo.ico`""
+          
+          # 更新可执行文件名（如果与默认不同）
+          if ($mainExe -ne "nursor_app.exe") {
+            Write-Host "Updating executable name from nursor_app.exe to $mainExe"
+            $issFile = $issFile -replace "nursor_app\.exe", $mainExe
+            $issFile = $issFile -replace "#define MyAppExeName.*", "#define MyAppExeName `"$mainExe`""
+          }
+          
+          # 保存更新后的脚本到构建目录
+          $issFile | Set-Content "nursor_win_installer.iss"
+          
+          # 创建输出目录
+          New-Item -ItemType Directory -Force -Path "..\output" | Out-Null
+          
+          # 使用完整路径调用 ISCC（从构建目录）
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $isccPath) {
+            Write-Host "Building installer with Inno Setup..."
+            & $isccPath "/O..\output" "nursor_win_installer.iss"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Inno Setup compilation failed with exit code: $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "Installer built successfully"
+            Write-Host "Installer output:"
+            Get-ChildItem "..\output" | Select-Object Name, Length | Format-Table
+          } else {
+            Write-Error "ISCC.exe not found at $isccPath"
+            exit 1
+          }
+      
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-windows
+          path: output/*.exe
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: output/*.exe
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: |
+            ## Windows Installer
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ inputs.flutter_ref }}
+            Core ref: ${{ inputs.core_ref }}
+          draft: false
+          prerelease: false
+

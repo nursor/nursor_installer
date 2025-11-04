@@ -1,0 +1,270 @@
+name: Build Linux Installer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      flutter_ref:
+        required: true
+        type: string
+      core_ref:
+        required: true
+        type: string
+
+env:
+  CORE_REPO: nursor/nursor-core2
+  FLUTTER_REPO: nursor/nursor-flutter-app
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build-linux:
+    strategy:
+      matrix:
+        arch: [amd64]
+        # 注意：arm64需要self-hosted runner，暂不支持
+        # 如需arm64支持，请配置self-hosted runner或使用cross-compilation
+      fail-fast: false
+    # 使用 Ubuntu 22.04 构建：
+    # - Ubuntu 22.04 有更好的 runner 可用性，GitHub Actions 提供充足的 runner
+    # - 如果需要在 Ubuntu 20.04 上运行，可能需要使用 Docker 构建来确保 GLib 版本兼容性
+    # - 对于大多数情况，在 22.04 上构建的应用在 20.04 上也能运行
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            curl \
+            wget \
+            unzip \
+            ca-certificates
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ inputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.PACKAGING_REPO_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libblkid1 \
+            liblzma5 \
+            libsecret-1-dev \
+            desktop-file-utils \
+            libappindicator3-dev \
+            patchelf
+      
+      - name: Check GLib version (for compatibility)
+        run: |
+          echo "Checking GLib version for compatibility..."
+          GLIB_VERSION=$(pkg-config --modversion glib-2.0)
+          echo "GLib version: $GLIB_VERSION"
+          echo "This version ensures compatibility with Ubuntu 20.04 and later versions"
+      
+      - name: Build Flutter App for Linux
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          # Flutter 会根据运行器的架构自动构建对应架构的版本
+          # 注意：GitHub Actions Linux runner 只支持 amd64，所以这里构建 x64 版本
+          flutter build linux --release
+      
+      - name: Download nursor-core for Linux
+        run: |
+          CORE_REF="${{ inputs.core_ref }}"
+          ARCH="${{ matrix.arch }}"
+          TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
+          mkdir -p linux
+          
+          # 下载二进制文件（需要认证，因为 release assets 是私有的）
+          CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}"
+          echo "Downloading nursor-core from: $CORE_URL"
+          
+          curl -L \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o linux/nursor-core \
+            "${CORE_URL}"
+          
+          if [ ! -f "linux/nursor-core" ] || [ ! -s "linux/nursor-core" ]; then
+            echo "ERROR: Failed to download nursor-core or file is empty"
+            exit 1
+          fi
+          
+          chmod +x linux/nursor-core
+          echo "✓ nursor-core downloaded successfully"
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-linux-${ARCH}.sha256"
+          if curl -fsSL \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+            echo "Verifying SHA256 checksum..."
+            (cd linux && sha256sum -c --quiet <(cat /tmp/checksum.sha256 | tr -d '\r\n' | awk '{print $1"  nursor-core"}')) || {
+              echo "ERROR: SHA256 checksum verification failed"
+              exit 1
+            }
+            echo "✓ SHA256 checksum verified successfully"
+          else
+            echo "⚠ WARNING: SHA256 checksum file not found, skipping verification"
+          fi
+      
+      - name: Package Linux installer
+        id: package_installer
+        run: |
+          ARCH="${{ matrix.arch }}"
+          RAW_VERSION="${{ inputs.version }}"
+          
+          # 清理版本号：移除 'v' 前缀和其他特殊字符
+          PACKAGE_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/[^a-zA-Z0-9._-]//g')
+          
+          echo "Raw version: $RAW_VERSION"
+          echo "Cleaned version: $PACKAGE_VERSION"
+          
+          # 创建输出目录（使用绝对路径确保存在）
+          OUTPUT_DIR="$(pwd)/output"
+          mkdir -p "$OUTPUT_DIR"
+          
+          # 验证输出目录是否创建成功
+          if [ ! -d "$OUTPUT_DIR" ]; then
+            echo "ERROR: Failed to create output directory: $OUTPUT_DIR"
+            exit 1
+          fi
+          echo "Output directory: $OUTPUT_DIR"
+          
+          # 创建临时打包目录
+          TEMP_DIR="$(pwd)/linux_appimage"
+          mkdir -p "$TEMP_DIR/usr/bin"
+          mkdir -p "$TEMP_DIR/usr/share/applications"
+          mkdir -p "$TEMP_DIR/usr/share/icons"
+          
+          # Flutter Linux 构建输出路径（GitHub Actions Linux runner 通常是 x64）
+          # Flutter 会自动构建到 build/linux/x64/release/bundle
+          FLUTTER_BUILD_PATH="flutter_app/build/linux/x64/release/bundle"
+          
+          # 检查 Flutter 构建输出是否存在
+          if [ ! -d "$FLUTTER_BUILD_PATH" ]; then
+            echo "ERROR: Flutter build output not found at $FLUTTER_BUILD_PATH"
+            echo "Current directory: $(pwd)"
+            echo "Available directories in flutter_app/build/linux:"
+            find flutter_app/build/linux -type d -maxdepth 3 2>/dev/null || echo "Directory flutter_app/build/linux not found"
+            exit 1
+          fi
+          
+          echo "Copying Flutter build artifacts from $FLUTTER_BUILD_PATH..."
+          cp -R "$FLUTTER_BUILD_PATH"/* "$TEMP_DIR/"
+          
+          # 复制 nursor-core 二进制文件
+          if [ ! -f "linux/nursor-core" ]; then
+            echo "ERROR: nursor-core not found in linux/ directory"
+            echo "Current directory: $(pwd)"
+            echo "Files in linux directory:"
+            ls -lah linux/ 2>/dev/null || echo "linux directory does not exist"
+            exit 1
+          fi
+          cp linux/nursor-core "$TEMP_DIR/nursor-core"
+          chmod +x "$TEMP_DIR/nursor-core"
+          
+          # 创建.desktop文件
+          mkdir -p "$TEMP_DIR/usr/share/applications"
+          cat > "$TEMP_DIR/usr/share/applications/nursor.desktop" <<'EOF'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Nursor
+          Exec=nursor
+          Icon=nursor
+          Categories=Utility;
+          EOF
+          
+          # 验证打包内容
+          echo "Package contents in $TEMP_DIR:"
+          ls -lah "$TEMP_DIR" | head -20
+          echo ""
+          
+          # 创建tar.gz包（使用完整路径）
+          PACKAGE_NAME="nursor-linux-${ARCH}-${PACKAGE_VERSION}.tar.gz"
+          OUTPUT_PATH="${OUTPUT_DIR}/${PACKAGE_NAME}"
+          
+          echo "Creating package: $OUTPUT_PATH"
+          echo "Source directory: $TEMP_DIR"
+          
+          # 确保在正确的目录执行 tar 命令
+          cd "$TEMP_DIR" || exit 1
+          
+          # 创建 tar.gz 包
+          if tar -czf "$OUTPUT_PATH" . 2>&1; then
+            echo "✓ tar command completed successfully"
+          else
+            echo "ERROR: tar command failed"
+            exit 1
+          fi
+          
+          # 返回原始目录
+          cd - > /dev/null
+          
+          # 验证文件是否创建成功
+          if [ ! -f "$OUTPUT_PATH" ]; then
+            echo "ERROR: Package file not created: $OUTPUT_PATH"
+            echo "Output directory contents:"
+            ls -lah "$OUTPUT_DIR" || echo "Output directory does not exist"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s "$OUTPUT_PATH" 2>/dev/null || echo "unknown")
+          echo "✓ Package created successfully: $OUTPUT_PATH (size: $FILE_SIZE bytes)"
+          ls -lh "$OUTPUT_PATH"
+          
+          echo "package_created=true" >> $GITHUB_OUTPUT
+          echo "package_path=$OUTPUT_PATH" >> $GITHUB_OUTPUT
+      
+      - name: Record build status
+        if: always()
+        run: |
+          echo "Build status for ${{ matrix.arch }}: ${{ job.status }}" >> build_status.txt
+      
+      - name: Upload Linux installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-linux-${{ matrix.arch }}
+          path: output/*.tar.gz
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: output/*.tar.gz
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: |
+            ## Linux Installer - ${{ matrix.arch }}
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ inputs.flutter_ref }}
+            Core ref: ${{ inputs.core_ref }}
+          draft: false
+          prerelease: false
+

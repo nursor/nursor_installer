@@ -1,0 +1,233 @@
+name: Build macOS Installer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      flutter_ref:
+        required: true
+        type: string
+      core_ref:
+        required: true
+        type: string
+
+env:
+  CORE_REPO: nursor/nursor-core2
+  FLUTTER_REPO: nursor/nursor-flutter-app
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+      fail-fast: false  # 允许一个失败时不停止其他构建
+    runs-on: macos-14  # GitHub Actions 会根据可用性自动选择架构
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'  # 使用稳定通道的最新版本（支持 Dart 3.8.1+）
+          architecture: ${{ matrix.arch == 'amd64' && 'x64' || 'arm64' }}
+          cache: true
+          cache-key: 'flutter-:os:-:channel:-:version:-:arch:-'
+      
+      - name: Download Flutter App
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_REPO }}
+          ref: ${{ inputs.flutter_ref }}
+          path: flutter_app
+          token: ${{ secrets.PACKAGING_REPO_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Build Flutter App for macOS
+        working-directory: ./flutter_app
+        run: |
+          flutter pub get
+          # Flutter 会根据运行器的架构自动构建对应架构的版本
+          flutter build macos --release
+          # 复制Nursor.app到构建目录
+          cp -R build/macos/Build/Products/Release/Nursor.app ../macos/
+      
+      - name: Download nursor-core
+        run: |
+          CORE_REF="${{ inputs.core_ref }}"
+          ARCH="${{ matrix.arch }}"
+          TOKEN="${{ secrets.PACKAGING_REPO_TOKEN }}"
+          mkdir -p macos
+          
+          # 下载二进制文件（需要认证，因为 release assets 是私有的）
+          CORE_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}"
+          echo "Downloading nursor-core from: $CORE_URL"
+          
+          curl -L \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o macos/nursor-core \
+            "${CORE_URL}"
+          
+          if [ ! -f "macos/nursor-core" ] || [ ! -s "macos/nursor-core" ]; then
+            echo "ERROR: Failed to download nursor-core or file is empty"
+            exit 1
+          fi
+          
+          chmod +x macos/nursor-core
+          echo "✓ nursor-core downloaded successfully"
+          
+          # 尝试下载并验证SHA256 checksum（如果存在）
+          CHECKSUM_URL="https://github.com/${{ env.CORE_REPO }}/releases/download/${CORE_REF}/core-darwin-${ARCH}.sha256"
+          if curl -fsSL \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${CHECKSUM_URL}" > /tmp/checksum.sha256 2>/dev/null; then
+            echo "Verifying SHA256 checksum..."
+            (cd macos && echo "$(cat /tmp/checksum.sha256 | awk '{print $1}')  nursor-core" | shasum -a 256 -c) || {
+              echo "ERROR: SHA256 checksum verification failed"
+              exit 1
+            }
+            echo "✓ SHA256 checksum verified successfully"
+          else
+            echo "⚠ WARNING: SHA256 checksum file not found, skipping verification"
+          fi
+      
+      - name: Prepare macOS build environment
+        working-directory: ./macos
+        run: |
+          # 确保所有必要的文件存在
+          echo "检查必需文件..."
+          REQUIRED_FILES=(
+            "build_installer.sh"
+            "nursor-core"
+            "Nursor.app"
+            "org.nursor.nursor-core.plist"
+            "org.nursor.trustca.plist"
+            "trust_ca_once.sh"
+            "scripts/preinstall"
+            "scripts/postinstall"
+            "scripts/send_to_sentry.sh"
+          )
+          
+          MISSING_FILES=()
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ] && [ ! -d "$file" ]; then
+              MISSING_FILES+=("$file")
+            fi
+          done
+          
+          if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+            echo "ERROR: 以下必需文件未找到:"
+            printf '  - %s\n' "${MISSING_FILES[@]}"
+            echo ""
+            echo "当前目录内容:"
+            ls -lah
+            exit 1
+          fi
+          
+          # 确保 build_installer.sh 有执行权限
+          if [ -f "build_installer.sh" ]; then
+            chmod +x build_installer.sh
+            echo "✓ build_installer.sh 已设置执行权限"
+            ls -l build_installer.sh
+          else
+            echo "ERROR: build_installer.sh 不存在"
+            exit 1
+          fi
+          
+          # 检查ca.pem文件（如果不存在，警告但继续）
+          if [ ! -f "ca.pem" ]; then
+            echo "WARNING: ca.pem not found. If required, please ensure it exists in the macos directory."
+          fi
+          
+          echo "所有必需文件检查通过！"
+      
+      - name: Build macOS installer
+        id: build_installer
+        working-directory: ./macos
+        run: |
+          # 获取当前绝对路径
+          MACOS_DIR="$(pwd)"
+          SCRIPT_PATH="${MACOS_DIR}/build_installer.sh"
+          
+          echo "Current directory: $MACOS_DIR"
+          echo "Script path: $SCRIPT_PATH"
+          
+          # 再次确认脚本存在且有执行权限
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "ERROR: build_installer.sh not found at $SCRIPT_PATH"
+            echo "Current directory: $MACOS_DIR"
+            echo "Directory contents:"
+            ls -lah
+            exit 1
+          fi
+          
+          # 确保脚本有执行权限
+          if [ ! -x "$SCRIPT_PATH" ]; then
+            echo "Setting execute permission on build_installer.sh"
+            chmod +x "$SCRIPT_PATH"
+          fi
+          
+          # 显示脚本权限信息
+          echo "Script permissions:"
+          ls -l "$SCRIPT_PATH"
+          
+          # 验证脚本可执行
+          if [ ! -x "$SCRIPT_PATH" ]; then
+            echo "ERROR: build_installer.sh is not executable"
+            exit 1
+          fi
+          
+          # 使用绝对路径执行脚本（sudo 可能无法找到相对路径）
+          echo "Executing build_installer.sh with absolute path..."
+          sudo "$SCRIPT_PATH"
+          
+          # 检查脚本执行结果
+          if [ $? -ne 0 ]; then
+            echo "ERROR: build_installer.sh failed with exit code $?"
+            exit 1
+          fi
+          
+          # 检查输出目录
+          if [ ! -d "${MACOS_DIR}/output" ]; then
+            echo "ERROR: output directory not created at ${MACOS_DIR}/output"
+            exit 1
+          fi
+          
+          echo "✓ Installer built successfully"
+          ls -lah "${MACOS_DIR}/output/"
+          echo "installer_built=true" >> $GITHUB_OUTPUT
+      
+      - name: Record build status
+        if: always()
+        run: |
+          echo "Build status for ${{ matrix.arch }}: ${{ job.status }}" >> build_status.txt
+      
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nursor-installer-macos-${{ matrix.arch }}
+          path: macos/output/*.pkg
+          retention-days: 30
+      
+      - name: Create GitHub Release (if tag exists)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: macos/output/*.pkg
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: |
+            ## macOS Installer - ${{ matrix.arch }}
+            
+            Build triggered from: ${{ github.event_name }}
+            Flutter ref: ${{ inputs.flutter_ref }}
+            Core ref: ${{ inputs.core_ref }}
+          draft: false
+          prerelease: false
+
